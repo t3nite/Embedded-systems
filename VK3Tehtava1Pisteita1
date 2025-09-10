@@ -1,0 +1,183 @@
+// Vaatimukset:
+// 1) Sekvenssi tulee tallentaa vastaanottavassa taskissa FIFO-puskuriin
+// 2) FIFOa lukee uusi dispatcher-taski, joka lähettää sekvenssin värin mukaisen signaalin valotaskille.
+// 3) Valotaskeissa täytyy siis olla condition variablet käytössä (tilakoneen sijasta).
+// 4) Ohjelmaan voi myös luoda release-signaalin. Kun valotaski on tehnyt tehtävänsä, se lähettää release-signaalin jota dispatcher-taski odottaa, ennenkuin ohjaa seuraavaa valoa sekvenssissä.
+// 5) Jos toteutit aiempaan tehtävään 3p suorituksen, valotaski voi olla single-shot taski, jossa valo on päällä esimerkiksi sekunnin ajan.
+
+
+
+#include <zephyr/kernel.h>
+#include <zephyr/sys/printk.h>
+#include <zephyr/device.h>
+#include <zephyr/drivers/gpio.h>
+#include <zephyr/drivers/uart.h>
+#include <zephyr/sys/util.h>
+#include <stdlib.h>
+
+// --- LED pin configurations ---
+static const struct gpio_dt_spec red   = GPIO_DT_SPEC_GET(DT_ALIAS(led0), gpios);
+static const struct gpio_dt_spec green = GPIO_DT_SPEC_GET(DT_ALIAS(led1), gpios);
+static const struct gpio_dt_spec blue  = GPIO_DT_SPEC_GET(DT_ALIAS(led2), gpios);
+
+// --- UART device (polling) ---
+#define UART_DEVICE_NODE DT_CHOSEN(zephyr_shell_uart)
+static const struct device *const uart_dev = DEVICE_DT_GET(UART_DEVICE_NODE);
+
+// --- Release semaphore ---
+K_SEM_DEFINE(release_sem, 0, 1);
+
+// --- Mutex + condition variables for LED tasks ---
+K_MUTEX_DEFINE(cv_mutex);
+K_CONDVAR_DEFINE(red_cv);
+K_CONDVAR_DEFINE(yellow_cv);
+K_CONDVAR_DEFINE(green_cv);
+
+// --- Dispatcher FIFO ---
+struct dispatcher_data {
+    void *fifo_reserved; // Required by Zephyr FIFO
+    char color;          // 'R', 'Y', 'G'
+};
+K_FIFO_DEFINE(dispatcher_fifo);
+
+// ---------------- Dispatcher task ----------------
+void dispatcher_task(void *, void *, void *)
+{
+    while (1) {
+        struct dispatcher_data *item = k_fifo_get(&dispatcher_fifo, K_FOREVER);
+        if (item) {
+            // Signal the corresponding light task
+            k_mutex_lock(&cv_mutex, K_FOREVER);
+            switch (item->color) {
+                case 'R': k_condvar_signal(&red_cv); break;
+                case 'Y': k_condvar_signal(&yellow_cv); break;
+                case 'G': k_condvar_signal(&green_cv); break;
+            }
+            k_mutex_unlock(&cv_mutex);
+
+            // Wait for the light task to complete
+            k_sem_take(&release_sem, K_FOREVER);
+
+            k_free(item);
+        }
+    }
+}
+
+// ---------------- Light tasks ----------------
+void red_task(void *, void *, void *)
+{
+    while (1) {
+        k_mutex_lock(&cv_mutex, K_FOREVER);
+        k_condvar_wait(&red_cv, &cv_mutex, K_FOREVER);
+        k_mutex_unlock(&cv_mutex);
+
+        gpio_pin_set_dt(&red, 1);
+        k_sleep(K_SECONDS(1));
+        gpio_pin_set_dt(&red, 0);
+
+        printk("RED done\n");
+        k_sem_give(&release_sem);
+    }
+}
+
+void yellow_task(void *, void *, void *)
+{
+    while (1) {
+        k_mutex_lock(&cv_mutex, K_FOREVER);
+        k_condvar_wait(&yellow_cv, &cv_mutex, K_FOREVER);
+        k_mutex_unlock(&cv_mutex);
+
+        gpio_pin_set_dt(&red, 1);
+        gpio_pin_set_dt(&green, 1);
+        k_sleep(K_SECONDS(1));
+        gpio_pin_set_dt(&red, 0);
+        gpio_pin_set_dt(&green, 0);
+
+        printk("YELLOW done\n");
+        k_sem_give(&release_sem);
+    }
+}
+
+void green_task(void *, void *, void *)
+{
+    while (1) {
+        k_mutex_lock(&cv_mutex, K_FOREVER);
+        k_condvar_wait(&green_cv, &cv_mutex, K_FOREVER);
+        k_mutex_unlock(&cv_mutex);
+
+        gpio_pin_set_dt(&green, 1);
+        k_sleep(K_SECONDS(1));
+        gpio_pin_set_dt(&green, 0);
+
+        printk("GREEN done\n");
+        k_sem_give(&release_sem);
+    }
+}
+
+// ---------------- Hardware init ----------------
+int init_hardware(void)
+{
+    const struct gpio_dt_spec leds[] = {red, green, blue};
+    int ret;
+
+    for (int i = 0; i < 3; i++) {
+        if (!device_is_ready(leds[i].port)) {
+            printk("LED device not ready\n");
+            return -1;
+        }
+        ret = gpio_pin_configure_dt(&leds[i], GPIO_OUTPUT_INACTIVE);
+        if (ret < 0) return ret;
+    }
+
+    if (!device_is_ready(uart_dev)) {
+        printk("UART device not ready\n");
+        return -1;
+    }
+
+    printk("Hardware initialized ok\n");
+    return 0;
+}
+
+// ---------------- UART polling task ----------------
+void uart_polling_task(void *, void *, void *)
+{
+    char c;
+    while (1) {
+        if (uart_poll_in(uart_dev, (uint8_t *)&c) == 0) {
+            // Convert lowercase to uppercase
+            if (c >= 'a' && c <= 'z') c = c - 'a' + 'A';
+
+            if (c == 'R' || c == 'Y' || c == 'G') {
+                struct dispatcher_data *item = k_malloc(sizeof(struct dispatcher_data));
+                if (item) {
+                    item->color = c;
+                    k_fifo_put(&dispatcher_fifo, item);
+                    printk("UART received: %c\n", c);
+                }
+            }
+        }
+        k_msleep(10);
+    }
+}
+
+// ---------------- Threads ----------------
+#define STACKSIZE 700
+#define PRIORITY 5
+
+K_THREAD_DEFINE(dispatcher_tid, STACKSIZE, dispatcher_task, NULL, NULL, NULL, PRIORITY, 0, 0);
+K_THREAD_DEFINE(uart_tid, STACKSIZE, uart_polling_task, NULL, NULL, NULL, PRIORITY, 0, 0);
+K_THREAD_DEFINE(red_tid, STACKSIZE, red_task, NULL, NULL, NULL, PRIORITY, 0, 0);
+K_THREAD_DEFINE(yellow_tid, STACKSIZE, yellow_task, NULL, NULL, NULL, PRIORITY, 0, 0);
+K_THREAD_DEFINE(green_tid, STACKSIZE, green_task, NULL, NULL, NULL, PRIORITY, 0, 0);
+
+// ---------------- main ----------------
+int main(void)
+{
+    if (init_hardware() < 0) {
+        printk("Hardware init failed\n");
+        return -1;
+    }
+
+    printk("System ready. Type R, Y, or G on UART to control LEDs.\n");
+    return 0;
+}
