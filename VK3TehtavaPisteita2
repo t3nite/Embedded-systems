@@ -4,6 +4,7 @@
 // 3) Dispatcher-taskin yksi toteutus on kuvattu tehtävän esimerkkikoodissa. Taskissa puretaan datat saadusta merkkijonosta. 
 // 4) Dispatcher-taskista kuitenkin puuttuu FIFO-puskurit eri värien datan välitykseen, jotka pitää toteuttaa itse. 
 
+// Perustelu: Lisätty ajan valinta
 
 #include <zephyr/kernel.h>
 #include <zephyr/sys/printk.h>
