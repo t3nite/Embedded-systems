@@ -5,7 +5,7 @@
 // 4) Ohjelmaan voi myös luoda release-signaalin. Kun valotaski on tehnyt tehtävänsä, se lähettää release-signaalin jota dispatcher-taski odottaa, ennenkuin ohjaa seuraavaa valoa sekvenssissä.
 // 5) Jos toteutit aiempaan tehtävään 3p suorituksen, valotaski voi olla single-shot taski, jossa valo on päällä esimerkiksi sekunnin ajan.
 
-
+// Perustelu: Vaatimukset täyttyvät.
 
 #include <zephyr/kernel.h>
 #include <zephyr/sys/printk.h>
