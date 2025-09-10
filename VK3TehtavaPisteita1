@@ -6,6 +6,7 @@
 // 5) Jos toteutit aiempaan tehtävään 3p suorituksen, valotaski voi olla single-shot taski, jossa valo on päällä esimerkiksi sekunnin ajan.
 
 // Perustelu: Vaatimukset täyttyvät.
+// prj.conf lisätty tämä rivi: CONFIG_HEAP_MEM_POOL_SIZE=1024
 
 #include <zephyr/kernel.h>
 #include <zephyr/sys/printk.h>
