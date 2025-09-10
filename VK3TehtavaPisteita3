@@ -1,7 +1,7 @@
 // Lisää sekvenssiin kirjain T, joka merkitsee sitä että sekvenssi toistetaan sen alusta alkaen n kertaa. Eli sekvenssi voi olla nyt muotoa R,100\r,Y,100\rT,5\r.
 // Toistoa vasten joudut todennäköisesti tallentamaan vastaanotetun sekvenssin ohjelmaan. 
 
-Perustelu: Lisätty mahdollisuus toistaa sekvenssi.
+// Perustelu: Lisätty mahdollisuus toistaa sekvenssi.
 // prj.conf lisätty tämä rivi: CONFIG_HEAP_MEM_POOL_SIZE=1024
 
 #include <zephyr/kernel.h>
