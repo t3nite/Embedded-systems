@@ -1,1 +1,1 @@
-IN00EK03-3001 (Sulautettujen järjestelmien ohjelmistokehitys) Kurssin kotitehtävät kaikilta viikolta 2.
+IN00EK03-3001 (Sulautettujen järjestelmien ohjelmistokehitys) Kurssin kotitehtävät viikolta 2.
