@@ -45,20 +45,24 @@ void dispatcher_task(void *, void *, void *)
 {
     while (1) {
         struct dispatcher_data *item = k_fifo_get(&dispatcher_fifo, K_FOREVER);
-        if (item) {
+        if (item != NULL) {
             // Signal the corresponding light task
             k_mutex_lock(&cv_mutex, K_FOREVER);
             switch (item->color) {
                 case 'R': k_condvar_signal(&red_cv); break;
                 case 'Y': k_condvar_signal(&yellow_cv); break;
                 case 'G': k_condvar_signal(&green_cv); break;
+                default: printk("Unknown color: %c\n", item->color); break;
             }
             k_mutex_unlock(&cv_mutex);
 
             // Wait for the light task to complete
             k_sem_take(&release_sem, K_FOREVER);
 
+            // Free memory
             k_free(item);
+        } else {
+            printk("Warning: Dispatcher received NULL item from FIFO\n");
         }
     }
 }
@@ -149,10 +153,12 @@ void uart_polling_task(void *, void *, void *)
 
             if (c == 'R' || c == 'Y' || c == 'G') {
                 struct dispatcher_data *item = k_malloc(sizeof(struct dispatcher_data));
-                if (item) {
+                if (item != NULL) {
                     item->color = c;
                     k_fifo_put(&dispatcher_fifo, item);
                     printk("UART received: %c\n", c);
+                } else {
+                    printk("Warning: Failed to allocate memory for dispatcher_data\n");
                 }
             }
         }
