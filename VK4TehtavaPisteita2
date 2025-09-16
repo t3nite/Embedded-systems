@@ -1,0 +1,167 @@
+/*
++1p suoritus: Lisää debugtietoa
+
+Laadi ohjelmaasi debug-taski luennoilla kuvatun mukaisesti. Debug-taskin idea on, että muut taskit eivät enää tulosta mitään konsoli-ikkunaan printk:lla, vaan ainoastaan debug-taski tekee tulostukset. 
+Tämä nopeuttaa muiden taskien suoritusta ja debug tekee tulostukset kun sen vuoro tulee. (Tyypillisesti debug-taskilla voi myös olla pienempi prioriteetti kuin muilla taskeilla).
+
+Koodia tulisi siis muuttaa siten, että nyt taskeissa olevat printk-tulostukset kirjoittavat viestit debug-taskille luotuun fifo-puskuriin ja taski lukee tulostettavat viestit puskurista. 
+Nyt tämä puskuri täytyy myös itse laatia ohjelmaan. */
+
+// Perustelut: On debug-taski ja fifo-puskuri.
+
+
+#include <zephyr/kernel.h>
+#include <zephyr/sys/printk.h>
+#include <zephyr/device.h>
+#include <zephyr/drivers/gpio.h>
+#include <zephyr/timing/timing.h>
+#include <string.h>
+
+// *** CONFIG NOTES ***
+// Lisää prj.conf -tiedostoon:
+// CONFIG_TIMING_FUNCTIONS=y
+// CONFIG_PRINTK=y
+// CONFIG_STDOUT_CONSOLE=y
+// CONFIG_HEAP_MEM_POOL_SIZE= 2048
+// *********************
+
+// I/O pin configurations (nrf5340_audio: led0 = red, led1 = green)
+static const struct gpio_dt_spec red   = GPIO_DT_SPEC_GET(DT_ALIAS(led0), gpios);
+static const struct gpio_dt_spec green = GPIO_DT_SPEC_GET(DT_ALIAS(led1), gpios);
+
+// Thread asetukset
+#define STACKSIZE 800
+#define PRIORITY 5
+#define DEBUG_PRIORITY 7   // debug-taski saa pienemmän prioriteetin
+
+// Debug FIFO
+K_FIFO_DEFINE(debug_fifo);
+
+// Viestirakenne FIFOon
+struct debug_msg {
+    void *fifo_reserved;  // varattu fifo-linkitykseen
+    char data[128];
+};
+
+// Funktio viestin lisäämiseen FIFOon
+static void debug_log(const char *fmt, ...)
+{
+    struct debug_msg *msg = k_malloc(sizeof(struct debug_msg));
+    if (!msg) return; // ei muistia
+
+    va_list args;
+    va_start(args, fmt);
+    vsnprintk(msg->data, sizeof(msg->data), fmt, args);
+    va_end(args);
+
+    k_fifo_put(&debug_fifo, msg);
+}
+
+// Debug-task
+void debug_task(void *, void *, void *)
+{
+    while (1) {
+        struct debug_msg *msg = k_fifo_get(&debug_fifo, K_FOREVER);
+        if (msg) {
+            printk("%s", msg->data);
+            k_free(msg);
+        }
+    }
+}
+K_THREAD_DEFINE(debug_thread, STACKSIZE, debug_task, NULL, NULL, NULL,
+                DEBUG_PRIORITY, 0, 0);
+
+// Sekvenssitaskeja
+void sequence_task(void *, void *, void*);
+K_THREAD_DEFINE(seq_thread, STACKSIZE, sequence_task, NULL, NULL, NULL,
+                PRIORITY, 0, 0);
+
+// LED init helper
+static void init_led(const struct gpio_dt_spec *led) {
+    int ret = gpio_pin_configure_dt(led, GPIO_OUTPUT_ACTIVE);
+    if (ret < 0) {
+        return;
+    }
+    gpio_pin_set_dt(led, 0);
+}
+
+int main(void)
+{
+    timing_init();
+    timing_start();
+
+    init_led(&red);
+    init_led(&green);
+
+    k_msleep(100);
+
+    debug_log("Program started..\n");
+
+    return 0;
+}
+
+// Task implementing R → Y (=R+G) → G
+void sequence_task(void *, void *, void*) {
+    while (true) {
+        uint64_t seq_total_ns = 0;
+
+        // --- RED ---
+        timing_start();
+        timing_t r_start = timing_counter_get();
+
+        gpio_pin_set_dt(&red, 1);
+        debug_log("Red on\n");
+        k_sleep(K_SECONDS(1));
+        gpio_pin_set_dt(&red, 0);
+        debug_log("Red off\n");
+        k_sleep(K_SECONDS(1));
+
+        timing_t r_end = timing_counter_get();
+        timing_stop();
+        uint64_t r_ns = timing_cycles_to_ns(timing_cycles_get(&r_start, &r_end));
+        debug_log("Red task: %lld us\n", r_ns/1000);
+        seq_total_ns += r_ns;
+
+        // --- YELLOW = RED+GREEN ---
+        timing_start();
+        timing_t y_start = timing_counter_get();
+
+        gpio_pin_set_dt(&red, 1);
+        gpio_pin_set_dt(&green, 1);
+        debug_log("Yellow on (R+G)\n");
+        k_sleep(K_SECONDS(1));
+        gpio_pin_set_dt(&red, 0);
+        gpio_pin_set_dt(&green, 0);
+        debug_log("Yellow off\n");
+        k_sleep(K_SECONDS(1));
+
+        timing_t y_end = timing_counter_get();
+        timing_stop();
+        uint64_t y_ns = timing_cycles_to_ns(timing_cycles_get(&y_start, &y_end));
+        debug_log("Yellow task: %lld us\n", y_ns/1000);
+        seq_total_ns += y_ns;
+
+        // --- GREEN ---
+        timing_start();
+        timing_t g_start = timing_counter_get();
+
+        gpio_pin_set_dt(&green, 1);
+        debug_log("Green on\n");
+        k_sleep(K_SECONDS(1));
+        gpio_pin_set_dt(&green, 0);
+        debug_log("Green off\n");
+        k_sleep(K_SECONDS(1));
+
+        timing_t g_end = timing_counter_get();
+        timing_stop();
+        uint64_t g_ns = timing_cycles_to_ns(timing_cycles_get(&g_start, &g_end));
+        debug_log("Green task: %lld us\n", g_ns/1000);
+        seq_total_ns += g_ns;
+
+        // --- Kokonaiskesto ---
+        debug_log("RYG sequence total: %lld us\n", seq_total_ns/1000);
+
+        // pieni tauko seuraavaan kierrokseen
+        k_msleep(500);
+    }
+}
