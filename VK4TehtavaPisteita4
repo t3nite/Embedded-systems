@@ -1,5 +1,4 @@
-/*
-+1p suoritus: Koodiin toiminnallisuuden tarkistuksia
+/* +1p suoritus: Koodiin toiminnallisuuden tarkistuksia
 
 Lisää ohjelmaasi assert-tarkistuksia, joilla nähdään että miten ohjelmasi pitäisi toimia.
 
@@ -7,7 +6,7 @@ On vaikea antaa täsmällistä ohjetta kun ohjelmat ovat erilaisia, mutta mieti 
 
 Esimerkkinä yksi assertin paikka voisi olla että jos sarjaportista luetaan vääriä / ylimääräisiä merkkejä, niin nämä ilmaistaan assertin avulla. */
 
-// Perustelut: Lisätty assert-tarkistuksia.
+// Perustelu: Lisätty 4 kpl assert-tarkistuksia.
 
 #include <zephyr/kernel.h>
 #include <zephyr/sys/printk.h>
@@ -31,28 +30,22 @@ Esimerkkinä yksi assertin paikka voisi olla että jos sarjaportista luetaan vä
 // CONFIG_ASSERT=y
 // *********************
 
-// I/O pin configurations (nrf5340_audio: led0 = red, led1 = green)
 static const struct gpio_dt_spec red   = GPIO_DT_SPEC_GET(DT_ALIAS(led0), gpios);
 static const struct gpio_dt_spec green = GPIO_DT_SPEC_GET(DT_ALIAS(led1), gpios);
 
-// Thread asetukset
 #define STACKSIZE 1024
 #define PRIORITY 5
 #define DEBUG_PRIORITY 7
 
-// Globaali lippu debug-tulostusten hallintaan
 static atomic_t debug_enabled;
 
-// Debug FIFO
 K_FIFO_DEFINE(debug_fifo);
 
-// Viestirakenne FIFOon
 struct debug_msg {
     void *fifo_reserved;
     char data[128];
 };
 
-// Funktio viestin lisäämiseen FIFOon
 static void debug_log(const char *fmt, ...)
 {
     if (!atomic_get(&debug_enabled)) {
@@ -60,7 +53,7 @@ static void debug_log(const char *fmt, ...)
     }
 
     struct debug_msg *msg = k_malloc(sizeof(struct debug_msg));
-    __ASSERT(msg != NULL, "Failed to allocate memory for debug message");
+    __ASSERT(msg != NULL, "Failed to allocate memory for debug message"); // 1. assert
 
     va_list args;
     va_start(args, fmt);
@@ -70,7 +63,6 @@ static void debug_log(const char *fmt, ...)
     k_fifo_put(&debug_fifo, msg);
 }
 
-// Debug-task
 void debug_task(void *, void *, void *)
 {
     while (1) {
@@ -84,12 +76,10 @@ void debug_task(void *, void *, void *)
 K_THREAD_DEFINE(debug_thread, STACKSIZE, debug_task, NULL, NULL, NULL,
                 DEBUG_PRIORITY, 0, 0);
 
-// Sekvenssitaskeja
 void sequence_task(void *, void *, void*);
 K_THREAD_DEFINE(seq_thread, STACKSIZE, sequence_task, NULL, NULL, NULL,
                 PRIORITY, 0, 0);
 
-// UART
 static const struct device *uart_dev = DEVICE_DT_GET(DT_CHOSEN(zephyr_console));
 K_MSGQ_DEFINE(uart_msgq, sizeof(char), 16, 4);
 
@@ -100,7 +90,8 @@ static void uart_cb(const struct device *dev, void *user_data)
         return;
     }
     while (uart_fifo_read(dev, &c, 1) == 1) {
-        k_msgq_put(&uart_msgq, &c, K_NO_WAIT);
+        int err = k_msgq_put(&uart_msgq, &c, K_NO_WAIT);
+        __ASSERT(err == 0, "Failed to put char in MSGQ"); // 4. assert
     }
 }
 
@@ -119,10 +110,9 @@ void uart_input_thread(void *, void *, void *)
 K_THREAD_DEFINE(uart_thread, STACKSIZE, uart_input_thread, NULL, NULL, NULL,
                 PRIORITY, 0, 0);
 
-// LED init helper
 static void init_led(const struct gpio_dt_spec *led) {
     int ret = gpio_pin_configure_dt(led, GPIO_OUTPUT_ACTIVE);
-    __ASSERT(ret >= 0, "Failed to configure LED pin");
+    __ASSERT(ret >= 0, "Failed to configure LED pin"); // 2. assert
     gpio_pin_set_dt(led, 0);
 }
 
@@ -135,10 +125,7 @@ int main(void)
     init_led(&red);
     init_led(&green);
 
-    if (!device_is_ready(uart_dev)) {
-        printk("UART device not found!");
-        return 0;
-    }
+    __ASSERT(device_is_ready(uart_dev), "UART device not ready"); // 3. assert
     uart_irq_callback_user_data_set(uart_dev, uart_cb, NULL);
     uart_irq_rx_enable(uart_dev);
 
@@ -150,7 +137,6 @@ int main(void)
     return 0;
 }
 
-// Task implementing R → Y (=R+G) → G
 void sequence_task(void *, void *, void*) {
     while (true) {
         uint64_t seq_total_ns = 0;
@@ -170,7 +156,7 @@ void sequence_task(void *, void *, void*) {
         debug_log("Red task: %lld us\n", r_ns/1000);
         seq_total_ns += r_ns;
 
-        // YELLOW = RED+GREEN
+        // YELLOW
         timing_start();
         timing_t y_start = timing_counter_get();
         gpio_pin_set_dt(&red, 1);
