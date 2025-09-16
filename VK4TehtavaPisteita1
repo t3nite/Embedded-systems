@@ -1,0 +1,145 @@
+/* 1p suoritus: Ajoitukset liikennevaloihin
+
+Lisää "perussekvenssin" (esimerkiksi RYG) jokaiseen valotaskiin laskenta kauanko taskin suoritus kestää, kuten esimerkkikoodissa. Sekvenssin kokonaisajan saat kun lasket taskien suoritusajat yhteen. 
+
+Raportoi mikrosekuntien tarkkuudella yllä saadut ajat konsoli-ikkunassa (printk): 
+- erikseen jokaiseen valotaskiin kulunut aika
+- sekvenssin yhteenlaskettu kokonaisaika
+
+Tee mittaukset kahteen kertaan vertailun vuoksi: 1) debug-viestit päällä ja 2) pois päältä. Debug-viesteiksi lasketaan tässä printk:lla konsolille tulostettavat viestit. 
+
+Tehtäväpalautukseen koodit ja screenshotit mittauksen tuloksista. */
+
+// Perustelut: Kuvakaappaukset Moodlessa. 
+
+
+#include <zephyr/kernel.h>
+#include <zephyr/sys/printk.h>
+#include <zephyr/device.h>
+#include <zephyr/drivers/gpio.h>
+#include <zephyr/timing/timing.h>
+
+// *** CONFIG NOTES ***
+// Lisää prj.conf -tiedostoon:
+// CONFIG_TIMING_FUNCTIONS=y
+// CONFIG_PRINTK=y
+// CONFIG_STDOUT_CONSOLE=y
+// *********************
+
+// I/O pin configurations (nrf5340_audio: led0 = red, led1 = green)
+static const struct gpio_dt_spec red   = GPIO_DT_SPEC_GET(DT_ALIAS(led0), gpios);
+static const struct gpio_dt_spec green = GPIO_DT_SPEC_GET(DT_ALIAS(led1), gpios);
+
+// Thread
+#define STACKSIZE 800
+#define PRIORITY 5
+
+void sequence_task(void *, void *, void*);
+K_THREAD_DEFINE(seq_thread, STACKSIZE, sequence_task, NULL, NULL, NULL, PRIORITY, 0, 0);
+
+// Uncomment to enable debug prints
+// #define DEBUG
+
+// LED init helper
+static void init_led(const struct gpio_dt_spec *led) {
+    int ret = gpio_pin_configure_dt(led, GPIO_OUTPUT_ACTIVE);
+    if (ret < 0) {
+        return;
+    }
+    gpio_pin_set_dt(led, 0);
+}
+
+int main(void)
+{
+    timing_init();
+    timing_start();
+
+    init_led(&red);
+    init_led(&green);
+
+    k_msleep(100);
+
+#ifdef DEBUG
+    printk("Program started..\n");
+#endif
+
+    return 0;
+}
+
+// Task implementing R → Y (=R+G) → G
+void sequence_task(void *, void *, void*) {
+    while (true) {
+        uint64_t seq_total_ns = 0;
+
+        // --- RED ---
+        timing_start();
+        timing_t r_start = timing_counter_get();
+
+        gpio_pin_set_dt(&red, 1);
+#ifdef DEBUG
+        printk("Red on\n");
+#endif
+        k_sleep(K_SECONDS(1));
+        gpio_pin_set_dt(&red, 0);
+#ifdef DEBUG
+        printk("Red off\n");
+#endif
+        k_sleep(K_SECONDS(1));
+
+        timing_t r_end = timing_counter_get();
+        timing_stop();
+        uint64_t r_ns = timing_cycles_to_ns(timing_cycles_get(&r_start, &r_end));
+        printk("Red task: %lld us\n", r_ns/1000);
+        seq_total_ns += r_ns;
+
+        // --- YELLOW = RED+GREEN ---
+        timing_start();
+        timing_t y_start = timing_counter_get();
+
+        gpio_pin_set_dt(&red, 1);
+        gpio_pin_set_dt(&green, 1);
+#ifdef DEBUG
+        printk("Yellow on (R+G)\n");
+#endif
+        k_sleep(K_SECONDS(1));
+        gpio_pin_set_dt(&red, 0);
+        gpio_pin_set_dt(&green, 0);
+#ifdef DEBUG
+        printk("Yellow off\n");
+#endif
+        k_sleep(K_SECONDS(1));
+
+        timing_t y_end = timing_counter_get();
+        timing_stop();
+        uint64_t y_ns = timing_cycles_to_ns(timing_cycles_get(&y_start, &y_end));
+        printk("Yellow task: %lld us\n", y_ns/1000);
+        seq_total_ns += y_ns;
+
+        // --- GREEN ---
+        timing_start();
+        timing_t g_start = timing_counter_get();
+
+        gpio_pin_set_dt(&green, 1);
+#ifdef DEBUG
+        printk("Green on\n");
+#endif
+        k_sleep(K_SECONDS(1));
+        gpio_pin_set_dt(&green, 0);
+#ifdef DEBUG
+        printk("Green off\n");
+#endif
+        k_sleep(K_SECONDS(1));
+
+        timing_t g_end = timing_counter_get();
+        timing_stop();
+        uint64_t g_ns = timing_cycles_to_ns(timing_cycles_get(&g_start, &g_end));
+        printk("Green task: %lld us\n", g_ns/1000);
+        seq_total_ns += g_ns;
+
+        // --- Kokonaiskesto ---
+        printk("RYG sequence total: %lld us\n", seq_total_ns/1000);
+
+        // pieni tauko seuraavaan kierrokseen
+        k_msleep(500);
+    }
+}
