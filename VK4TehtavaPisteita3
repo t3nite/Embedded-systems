@@ -1,3 +1,13 @@
+/* +1p suoritus: Debugin asetus päälle / pois
+
+Lisää toiminnallisuus missä sarjaportin kautta voidaan laittaa debuggitulostukset päälle ja pois. 
+
+Tämä voidaan tehdä samoin kuin valosekvenssin lukeminen sarjaportista, mutta varataan sitä varten komentokirjain 'D'. 
+
+Tässä täytyy muokata esimerkkikoodia siten, että DEBUG-vakion sijasta käytetäänkin uutta muuttujaa lippuna onko debug päällä vai ei. */
+
+// Perustelu: Lisätty asetus D-kirjaimeen.
+
 #include <zephyr/kernel.h>
 #include <zephyr/sys/printk.h>
 #include <zephyr/device.h>
