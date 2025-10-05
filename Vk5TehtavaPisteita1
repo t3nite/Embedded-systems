@@ -122,7 +122,8 @@ void main(void)
                 if (seconds > 0) {
                     printk("Blue LED will light up for %d seconds\n", seconds);
                     k_timer_user_data_set(&blue_timer, (void *)(intptr_t)seconds);
-                    k_timer_start(&blue_timer, K_NO_WAIT, K_NO_WAIT);
+                    k_timer_start(&blue_timer, K_SECONDS(seconds), K_NO_WAIT);
+                    //k_timer_start(&blue_timer, K_NO_WAIT, K_NO_WAIT);
                 } else {
                     printk("Invalid time string\n");
                 }
