@@ -1,0 +1,377 @@
+/* Laajenna testausprojektia niin, että teet sinne uuden testisuiten ja siihen liittyvän parserointifunktion ja testikeissit UARTin kautta tuleville liikennevalosekvensseille 
+(esimerksiksi "RYGRYG" tai "R,1000,Y,500,G,1000") riippuen siitä mitä toiminnallisuutta ohjelmassasi on. 
+Testikeisseissä tulisi esim testata ettei liikennevalosekvenssissä ole vääriä merkkejä tai muita virheitä. 
+
+Voit tehdä uudet funktiot samoihin testiprojektin tiedostoihin mihin teit aiemmat testikeissit. 
+Jos luot näitä varten omat tiedostot, niin muista muokata cmakelists.txt-tiedostot samalla. 
+
+Lopuksi liitä uusi parserointifunktio liikennevalo-ohjelmaasi. */
+
+// Perustelu: Lisätty uusi testisuite ja testejä.
+
+#include <zephyr/kernel.h>
+#include <zephyr/sys/printk.h>
+#include <zephyr/device.h>
+#include <zephyr/drivers/gpio.h>
+#include <zephyr/drivers/uart.h>
+#include <stdlib.h>
+#include <string.h>
+#include <stdio.h>
+
+// Error codes
+#define TIME_LEN_ERROR      -1 // väärän pituinen merkkijono
+#define TIME_ARRAY_ERROR    -2 // NULL tai tyhjä
+#define TIME_VALUE_ERROR    -3 // virheellinen arvo tai ei-num. merkki
+#define TIME_ZERO_ERROR     -4 // uusi virhekoodi nolla-sekunteja varten
+
+#define TRAFFIC_OK            0
+#define TRAFFIC_CHAR_ERROR   -1
+#define TRAFFIC_FORMAT_ERROR -2
+#define TRAFFIC_REPEAT_ERROR -3
+
+typedef struct {
+    char colors[40];
+    int times[40];
+    int length;
+    int repeat;
+} traffic_sequence_t;
+
+
+int time_parse(char *time);
+int traffic_parse(const char *input, traffic_sequence_t *seq);
+void uart_print(const char *msg);
+
+// ---------------- LED pin configurations ----------------
+static const struct gpio_dt_spec red   = GPIO_DT_SPEC_GET(DT_ALIAS(led0), gpios);
+static const struct gpio_dt_spec green = GPIO_DT_SPEC_GET(DT_ALIAS(led1), gpios);
+static const struct gpio_dt_spec blue  = GPIO_DT_SPEC_GET(DT_ALIAS(led2), gpios); 
+
+// ---------------- UART device ----------------
+#define UART_DEVICE_NODE DT_CHOSEN(zephyr_shell_uart)
+static const struct device *const uart_dev = DEVICE_DT_GET(UART_DEVICE_NODE);
+
+// ---------------- Release semaphore ----------------
+K_SEM_DEFINE(release_sem, 0, 1);
+
+// ---------------- Dispatcher FIFO ----------------
+struct dispatcher_data {
+    void *fifo_reserved;
+    char msg[80];
+};
+K_FIFO_DEFINE(dispatcher_fifo);
+
+// ---------------- Light FIFOs ----------------
+struct light_data {
+    void *fifo_reserved;
+    int time_ms;
+};
+K_FIFO_DEFINE(red_fifo);
+K_FIFO_DEFINE(yellow_fifo);
+K_FIFO_DEFINE(green_fifo);
+K_FIFO_DEFINE(blue_fifo);
+
+// ---------------- UART helper ----------------
+void uart_print(const char *msg) {
+    while (*msg) {
+        uart_poll_out(uart_dev, *msg++);
+    }
+}
+
+// ---------------- Hardware initialization ----------------
+int init_hardware(void)
+{
+    const struct gpio_dt_spec leds[] = {red, green, blue};
+    int ret;
+
+    for (int i = 0; i < 3; i++) {
+        if (!device_is_ready(leds[i].port)) {
+            printk("LED device not ready\n");
+            return -1;
+        }
+        ret = gpio_pin_configure_dt(&leds[i], GPIO_OUTPUT_INACTIVE);
+        if (ret < 0) return ret;
+    }
+
+    if (!device_is_ready(uart_dev)) {
+        printk("UART device not ready\n");
+        return -1;
+    }
+
+    printk("Hardware initialized OK\n");
+    return 0;
+}
+
+// ---------------- UART task ----------------
+void uart_task(void *, void *, void *)
+{
+    char rc;
+    char uart_msg[80];
+    int uart_msg_cnt = 0;
+
+    while (1) {
+        if (uart_poll_in(uart_dev, (uint8_t *)&rc) == 0) {
+            if (rc != '\r') {
+                if (uart_msg_cnt < sizeof(uart_msg)-1) {
+                    uart_msg[uart_msg_cnt++] = rc;
+                }
+            } else {
+                uart_msg[uart_msg_cnt] = '\0';
+
+                struct dispatcher_data *buf = k_malloc(sizeof(struct dispatcher_data));
+                if (buf != NULL) {
+                    strncpy(buf->msg, uart_msg, sizeof(buf->msg)-1);
+                    buf->msg[sizeof(buf->msg)-1] = '\0';
+                    k_fifo_put(&dispatcher_fifo, buf);
+                    printk("UART msg: %s\n", uart_msg);
+                } else {
+                    printk("Error: malloc failed\n");
+                }
+
+                uart_msg_cnt = 0;
+            }
+        }
+        k_msleep(10);
+    }
+}
+
+// ---------------- Dispatcher task ----------------
+void dispatcher_task(void *, void *, void *)
+{
+    while (1) {
+        struct dispatcher_data *rec_item = k_fifo_get(&dispatcher_fifo, K_FOREVER);
+        if (!rec_item) continue;
+
+        // --- Tarkistetaan 6-merkkinen aika ja sytytetään sininen LED ---
+if (strlen(rec_item->msg) == 6 && isdigit((unsigned char)rec_item->msg[0])) {
+    int sec = time_parse(rec_item->msg);
+    if (sec > 0) {
+        uart_print("Waiting before turning on Blue LED...\r\n");
+        k_msleep(sec * 1000);   // odotetaan sec sekuntia
+        struct light_data *ldata = k_malloc(sizeof(struct light_data));
+        if (ldata) {
+            ldata->time_ms = 1000; // sininen palaa esimerkiksi 1 sekunnin
+            k_fifo_put(&blue_fifo, ldata);
+            uart_print("Blue LED ON\r\n");
+        }
+    } else {
+        uart_print("Time parse error\r\n");
+    }
+    k_free(rec_item);
+    continue;
+}
+
+        traffic_sequence_t seq;
+        int res = traffic_parse(rec_item->msg, &seq);
+        if (res != TRAFFIC_OK) {
+            switch (res) {
+                case TRAFFIC_CHAR_ERROR: 
+                    uart_print("Error: Invalid character in sequence\r\n"); 
+                    break;
+                case TRAFFIC_FORMAT_ERROR: 
+                    uart_print("Error: Format error in sequence\r\n"); 
+                    break;
+                case TRAFFIC_REPEAT_ERROR: 
+                    uart_print("Error: Invalid repeat value in sequence\r\n"); 
+                    break;
+                default: 
+                    uart_print("Error: Unknown error\r\n"); 
+                    break;
+            }
+            k_free(rec_item);
+            continue;
+        }
+
+        // Suorita sekvenssi repeat-määrän mukaan
+        for (int r = 0; r < seq.repeat; r++) {
+            for (int i = 0; i < seq.length; i++) {
+                struct light_data *ldata = k_malloc(sizeof(struct light_data));
+                if (!ldata) break;
+                ldata->time_ms = seq.times[i];
+
+                switch (seq.colors[i]) {
+                    case 'R': k_fifo_put(&red_fifo, ldata); break;
+                    case 'Y': k_fifo_put(&yellow_fifo, ldata); break;
+                    case 'G': k_fifo_put(&green_fifo, ldata); break;
+                    default: k_free(ldata); break;
+                }
+                k_sem_take(&release_sem, K_FOREVER);
+            }
+        }
+
+        k_free(rec_item);
+    }
+}
+
+// ---------------- Light tasks ----------------
+void red_task(void *, void *, void *)
+{
+    while (1) {
+        struct light_data *ldata = k_fifo_get(&red_fifo, K_FOREVER);
+        if (!ldata) continue;
+
+        gpio_pin_set_dt(&red, 1);
+        k_msleep(ldata->time_ms);
+        gpio_pin_set_dt(&red, 0);
+
+        printk("RED done (%d ms)\n", ldata->time_ms);
+        k_free(ldata);
+
+        k_sem_give(&release_sem);
+    }
+}
+
+void yellow_task(void *, void *, void *)
+{
+    while (1) {
+        struct light_data *ldata = k_fifo_get(&yellow_fifo, K_FOREVER);
+        if (!ldata) continue;
+
+        // Yellow = Red + Green
+        gpio_pin_set_dt(&red, 1);
+        gpio_pin_set_dt(&green, 1);
+        k_msleep(ldata->time_ms);
+        gpio_pin_set_dt(&red, 0);
+        gpio_pin_set_dt(&green, 0);
+
+        printk("YELLOW done (%d ms)\n", ldata->time_ms);
+        k_free(ldata);
+
+        k_sem_give(&release_sem);
+    }
+}
+
+void green_task(void *, void *, void *)
+{
+    while (1) {
+        struct light_data *ldata = k_fifo_get(&green_fifo, K_FOREVER);
+        if (!ldata) continue;
+
+        gpio_pin_set_dt(&green, 1);
+        k_msleep(ldata->time_ms);
+        gpio_pin_set_dt(&green, 0);
+
+        printk("GREEN done (%d ms)\n", ldata->time_ms);
+        k_free(ldata);
+
+        k_sem_give(&release_sem);
+    }
+}
+
+void blue_task(void *, void *, void *) {
+    while (1) {
+        struct light_data *ldata = k_fifo_get(&blue_fifo, K_FOREVER);
+        if (!ldata) continue;
+
+        gpio_pin_set_dt(&blue, 1);
+        k_msleep(ldata->time_ms);
+        gpio_pin_set_dt(&blue, 0);
+
+        printk("BLUE done (%d ms)\n", ldata->time_ms);
+        k_free(ldata);
+
+        k_sem_give(&release_sem);
+    }
+}
+
+// ---------------- Threads ----------------
+#define STACKSIZE 700
+#define PRIORITY 5
+
+K_THREAD_DEFINE(dispatcher_tid, STACKSIZE, dispatcher_task, NULL, NULL, NULL, PRIORITY, 0, 0);
+K_THREAD_DEFINE(uart_tid, STACKSIZE, uart_task, NULL, NULL, NULL, PRIORITY, 0, 0);
+K_THREAD_DEFINE(red_tid, STACKSIZE, red_task, NULL, NULL, NULL, PRIORITY, 0, 0);
+K_THREAD_DEFINE(yellow_tid, STACKSIZE, yellow_task, NULL, NULL, NULL, PRIORITY, 0, 0);
+K_THREAD_DEFINE(green_tid, STACKSIZE, green_task, NULL, NULL, NULL, PRIORITY, 0, 0);
+K_THREAD_DEFINE(blue_tid, STACKSIZE, blue_task, NULL, NULL, NULL, PRIORITY, 0, 0);
+
+
+// ---------------- Main ----------------
+int main(void)
+{
+    if (init_hardware() < 0) {
+        printk("Hardware init failed\n");
+        return -1;
+    }
+
+    printk("System ready. Send sequences like R,100,Y,100,T,5\\r via UART.\n");
+    printk("Invalid entries will be skipped, sequence continues.\n");
+    return 0;
+}
+
+// ---------------- Traffic parser ----------------
+int traffic_parse(const char *input, traffic_sequence_t *seq) {
+    if (!input || !seq) return TRAFFIC_FORMAT_ERROR;
+
+    seq->length = 0;
+    seq->repeat = 1;
+
+    const char *p = input;
+    while (*p) {
+        char color;
+        int time, nread;
+        if (sscanf(p, " %c , %d %n", &color, &time, &nread) >= 2) {
+
+            if (color == 'T') {
+                seq->repeat = time;
+                if (seq->repeat <= 0) return TRAFFIC_REPEAT_ERROR;
+            } else if (color == 'R' || color == 'Y' || color == 'G') {
+                if (seq->length >= 40) return TRAFFIC_FORMAT_ERROR;
+                seq->colors[seq->length] = color;
+                seq->times[seq->length] = time;
+                seq->length++;
+            } else {
+                return TRAFFIC_CHAR_ERROR; // väärä merkki
+            }
+            p += nread;
+        } else {
+            return TRAFFIC_FORMAT_ERROR;
+        }
+        while (*p == ',' || *p == ' ' || *p == '\r' || *p == '\n') p++;
+    }
+    return TRAFFIC_OK;
+}
+
+int time_parse(char *time) {
+
+    // how many seconds, default returns error
+    int seconds = TIME_LEN_ERROR;
+
+    if (time == NULL) {
+        return TIME_ARRAY_ERROR;
+    }
+
+     if (strlen(time) == 0) {
+        return TIME_ARRAY_ERROR;      // tyhjä merkkijono
+    }
+
+    if (strlen(time) != 6) {
+        return TIME_LEN_ERROR;
+    }
+
+    // Varmistetaan, että kaikki merkit ovat numeroita
+    for (int i = 0; i < 6; ++i) {
+        if (!isdigit((unsigned char)time[i])) {
+            return TIME_VALUE_ERROR;
+        }
+    }
+
+    int values[3];
+    values[2] = atoi(time+4); // seconds
+    time[4] = 0;
+    values[1] = atoi(time+2); // minutes
+    time[2] = 0;
+    values[0] = atoi(time);   // hours
+
+    // boundary checks
+    if (values[0] < 0 || values[0] > 23) return TIME_VALUE_ERROR;
+    if (values[1] < 0 || values[1] > 59) return TIME_VALUE_ERROR;
+    if (values[2] < 0 || values[2] > 59) return TIME_VALUE_ERROR;
+
+    
+    if (values[1] == 0 && values[2] == 0) return TIME_ZERO_ERROR;
+
+    // only minutes and seconds count
+    seconds = values[1] * 60 + values[2];
+
+    return seconds;
+}
