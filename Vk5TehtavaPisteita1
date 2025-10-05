@@ -1,4 +1,10 @@
-// Perustelu: Sininen ledi laitetaan päälle kun tapahtuu keskeytys.
+/* Testikeissit kirjoitetaan tiedostoon test_cases/TimeParserTest.cpp. 
+Kirjoita testikeisseihin ainakin puuttuvat boundary value-testit.
+Tässä tulee siis testata että aikamerkkijonosta puretut aika-arvot ovat laillisia: mikään aika-arvo (h, m, s) ei ole negatiivinen,
+sekuntien arvo ei ole yli 59, minuutien arvo ei ole yli 59, tuntien arvo ei ole yli 23. 
+Tarkistukset tehdään vaikka näitä arvoja nyt ei liikennevalo-ohjelmassa käytetäkään. */
+
+// Perustelu: Sininen ledi laitetaan päälle kun tapahtuu keskeytys, ja aika-arvot testataan.
 
 #include <zephyr/kernel.h>
 #include <zephyr/sys/printk.h>
