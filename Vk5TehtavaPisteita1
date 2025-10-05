@@ -1,60 +1,165 @@
+// Perustelu: Sininen ledi laitetaan päälle kun tapahtuu keskeytys.
+
 #include <zephyr/kernel.h>
 #include <zephyr/sys/printk.h>
 #include <zephyr/device.h>
 #include <zephyr/drivers/uart.h>
 #include <zephyr/drivers/gpio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <ctype.h>
 
-// LED GPIO
-static const struct gpio_dt_spec red = GPIO_DT_SPEC_GET(DT_ALIAS(led0), gpios);
+// Error codes (same as parser)
+#define TIME_LEN_ERROR     -1
+#define TIME_ARRAY_ERROR   -2
+#define TIME_VALUE_ERROR   -3
 
-// UART initialization
+// LEDs
+static const struct gpio_dt_spec red   = GPIO_DT_SPEC_GET(DT_ALIAS(led0), gpios);
+static const struct gpio_dt_spec green = GPIO_DT_SPEC_GET(DT_ALIAS(led1), gpios);
+static const struct gpio_dt_spec blue  = GPIO_DT_SPEC_GET(DT_ALIAS(led2), gpios);
+
+// UART
 #define UART_DEVICE_NODE DT_CHOSEN(zephyr_shell_uart)
-static const struct device *const uart_dev = DEVICE_DT_GET(UART_DEVICE_NODE);
+static const struct device *uart_dev = DEVICE_DT_GET(UART_DEVICE_NODE);
 
-// error codes
-#define TIME_ERROR		2
-#define COMMAND_OK		0
+// Traffic light states
+enum traffic_state {
+    STATE_RED,
+    STATE_YELLOW,
+    STATE_GREEN,
+    STATE_OFF
+};
 
-// Parser
-int parser(char *command);
+static enum traffic_state current_state = STATE_RED;
+static bool blue_active = false; // sininen LED päällä?
 
-// Ajastin
-static struct k_timer my_timer;
+// Parser prototype
+int time_parse(char *time);
 
-// Red LED control
-void RedLight_On(void) {
-    gpio_pin_set_dt(&red, 1);
-    printk("Red LED ON\n");
+// --- Traffic light timer ---
+void traffic_light_cb(struct k_timer *timer)
+{
+    if (blue_active) {
+        // Sininen on päällä, ei muut ledit päälle
+        return;
+    }
+
+    switch (current_state) {
+        case STATE_RED:
+            gpio_pin_set_dt(&red, 1);
+            gpio_pin_set_dt(&green, 0);
+            current_state = STATE_YELLOW;
+            break;
+        case STATE_YELLOW:
+            gpio_pin_set_dt(&red, 1);
+            gpio_pin_set_dt(&green, 1);
+            current_state = STATE_GREEN;
+            break;
+        case STATE_GREEN:
+            gpio_pin_set_dt(&red, 0);
+            gpio_pin_set_dt(&green, 1);
+            current_state = STATE_OFF;
+            break;
+        case STATE_OFF:
+            gpio_pin_set_dt(&red, 0);
+            gpio_pin_set_dt(&green, 0);
+            current_state = STATE_RED;
+            break;
+    }
 }
+K_TIMER_DEFINE(traffic_timer, traffic_light_cb, NULL);
 
-void RedLight_Off(void) {
+// --- Blue LED OFF timer ---
+void blue_off_cb(struct k_timer *timer)
+{
+    gpio_pin_set_dt(&blue, 0);
+    blue_active = false; // palauta liikennevalojen ohjaus
+}
+K_TIMER_DEFINE(blue_off_timer, blue_off_cb, NULL);
+
+// --- Blue LED ON timer ---
+void blue_led_cb(struct k_timer *timer)
+{
+    // Sammutetaan muut ledit sinisen ajaksi
     gpio_pin_set_dt(&red, 0);
-    printk("Red LED OFF\n");
+    gpio_pin_set_dt(&green, 0);
+    blue_active = true;
+    gpio_pin_set_dt(&blue, 1);
+    // Käynnistetään timer sinisen sammutukseen
+    k_timer_start(&blue_off_timer, K_SECONDS((int)k_timer_user_data_get(timer)), K_NO_WAIT);
+}
+K_TIMER_DEFINE(blue_timer, blue_led_cb, NULL);
+
+void main(void)
+{
+    if (!device_is_ready(uart_dev)) {
+        printk("UART not ready!\n");
+        return;
+    }
+
+    if (!device_is_ready(red.port) || !device_is_ready(green.port) || !device_is_ready(blue.port)) {
+        printk("LEDs not ready!\n");
+        return;
+    }
+
+    gpio_pin_configure_dt(&red, GPIO_OUTPUT_INACTIVE);
+    gpio_pin_configure_dt(&green, GPIO_OUTPUT_INACTIVE);
+    gpio_pin_configure_dt(&blue, GPIO_OUTPUT_INACTIVE);
+
+    // Käynnistetään liikennevaloajastin: 1 s välein
+    k_timer_start(&traffic_timer, K_SECONDS(1), K_SECONDS(1));
+
+    char c = 0;
+    int cnt = 0;
+    char buffer[16] = {0};
+
+    while (1) {
+        // UART input
+        if (uart_poll_in(uart_dev, &c) == 0) {
+            if (c == '\n' || c == '\r') {
+                int seconds = time_parse(buffer);
+                if (seconds > 0) {
+                    printk("Blue LED will light up for %d seconds\n", seconds);
+                    k_timer_user_data_set(&blue_timer, (void *)(intptr_t)seconds);
+                    k_timer_start(&blue_timer, K_NO_WAIT, K_NO_WAIT);
+                } else {
+                    printk("Invalid time string\n");
+                }
+                cnt = 0;
+                memset(buffer, 0, sizeof(buffer));
+            } else {
+                if (cnt < sizeof(buffer) - 1)
+                    buffer[cnt++] = c;
+            }
+        }
+        k_msleep(10);
+    }
 }
 
-// Ajastinkeskeytys
-void Timer_ISR(struct k_timer *timer_id) {
-    RedLight_On();
-    k_sleep(K_SECONDS(1));  // punainen LED päälle 1s
-    RedLight_Off();
-}
-
-void Timer_Start(int seconds) {
-    k_timer_start(&my_timer, K_SECONDS(seconds), K_NO_WAIT);
-}
-
-// Parseri
+// Parser function
 int time_parse(char *time) {
 
     // how many seconds, default returns error
     int seconds = TIME_LEN_ERROR;
 
     if (time == NULL) {
-        return TIME_LEN_ERROR;
+        return TIME_ARRAY_ERROR;
+    }
+
+     if (strlen(time) == 0) {
+        return TIME_ARRAY_ERROR;      // tyhjä merkkijono
     }
 
     if (strlen(time) != 6) {
         return TIME_LEN_ERROR;
+    }
+
+    // Varmistetaan, että kaikki merkit ovat numeroita
+    for (int i = 0; i < 6; ++i) {
+        if (!isdigit((unsigned char)time[i])) {
+            return TIME_VALUE_ERROR;
+        }
     }
 
     int values[3];
@@ -65,58 +170,12 @@ int time_parse(char *time) {
     values[0] = atoi(time);   // hours
 
     // boundary checks
-    if (values[0] < 0 || values[0] > 23) return TIME_LEN_ERROR;
-    if (values[1] < 0 || values[1] > 59) return TIME_LEN_ERROR;
-    if (values[2] < 0 || values[2] > 59) return TIME_LEN_ERROR;
+    if (values[0] < 0 || values[0] > 23) return TIME_VALUE_ERROR;
+    if (values[1] < 0 || values[1] > 59) return TIME_VALUE_ERROR;
+    if (values[2] < 0 || values[2] > 59) return TIME_VALUE_ERROR;
 
     // only minutes and seconds count
     seconds = values[1] * 60 + values[2];
 
     return seconds;
-}
-
-
-// Main
-int main(void)
-{
-    // UART initialization
-    if (!device_is_ready(uart_dev)) {
-        printk("UART initialization failed!\n");
-        return 0;
-    } 
-
-    // Red LED initialization
-    if (gpio_pin_configure_dt(&red, GPIO_OUTPUT_INACTIVE) < 0) {
-        printk("Red LED configure failed!\n");
-        return 0;
-    }
-
-    // Initialize k_timer
-    k_timer_init(&my_timer, Timer_ISR, NULL);
-
-    k_sleep(K_SECONDS(1));  // Odota alustusten jälkeen
-
-    char c = 0;
-    int cnt = 0;
-    char buffer[16] = {0};
-
-    while (1) {
-        if (uart_poll_in(uart_dev, &c) == 0) {
-            if (c == '\n' || c == '\r') {
-                int ret = parser(buffer);
-                if (ret == COMMAND_OK) {
-                    printk("Timer started for %d seconds\n", time_parse(buffer));
-                } else {
-                    printk("Invalid time format!\n");
-                }
-                cnt = 0;
-                memset(buffer, 0, sizeof(buffer));
-            } else {
-                if (cnt < sizeof(buffer) - 1) {  // estä ylivuoto
-                    buffer[cnt++] = c;
-                }
-            }
-        }
-    }
-    return 0;
 }
