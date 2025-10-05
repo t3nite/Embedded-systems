@@ -1,0 +1,122 @@
+#include <zephyr/kernel.h>
+#include <zephyr/sys/printk.h>
+#include <zephyr/device.h>
+#include <zephyr/drivers/uart.h>
+#include <zephyr/drivers/gpio.h>
+
+// LED GPIO
+static const struct gpio_dt_spec red = GPIO_DT_SPEC_GET(DT_ALIAS(led0), gpios);
+
+// UART initialization
+#define UART_DEVICE_NODE DT_CHOSEN(zephyr_shell_uart)
+static const struct device *const uart_dev = DEVICE_DT_GET(UART_DEVICE_NODE);
+
+// error codes
+#define TIME_ERROR		2
+#define COMMAND_OK		0
+
+// Parser
+int parser(char *command);
+
+// Ajastin
+static struct k_timer my_timer;
+
+// Red LED control
+void RedLight_On(void) {
+    gpio_pin_set_dt(&red, 1);
+    printk("Red LED ON\n");
+}
+
+void RedLight_Off(void) {
+    gpio_pin_set_dt(&red, 0);
+    printk("Red LED OFF\n");
+}
+
+// Ajastinkeskeytys
+void Timer_ISR(struct k_timer *timer_id) {
+    RedLight_On();
+    k_sleep(K_SECONDS(1));  // punainen LED päälle 1s
+    RedLight_Off();
+}
+
+void Timer_Start(int seconds) {
+    k_timer_start(&my_timer, K_SECONDS(seconds), K_NO_WAIT);
+}
+
+// Parseri
+int time_parse(char *time) {
+
+    // how many seconds, default returns error
+    int seconds = TIME_LEN_ERROR;
+
+    if (time == NULL) {
+        return TIME_LEN_ERROR;
+    }
+
+    if (strlen(time) != 6) {
+        return TIME_LEN_ERROR;
+    }
+
+    int values[3];
+    values[2] = atoi(time+4); // seconds
+    time[4] = 0;
+    values[1] = atoi(time+2); // minutes
+    time[2] = 0;
+    values[0] = atoi(time);   // hours
+
+    // boundary checks
+    if (values[0] < 0 || values[0] > 23) return TIME_LEN_ERROR;
+    if (values[1] < 0 || values[1] > 59) return TIME_LEN_ERROR;
+    if (values[2] < 0 || values[2] > 59) return TIME_LEN_ERROR;
+
+    // only minutes and seconds count
+    seconds = values[1] * 60 + values[2];
+
+    return seconds;
+}
+
+
+// Main
+int main(void)
+{
+    // UART initialization
+    if (!device_is_ready(uart_dev)) {
+        printk("UART initialization failed!\n");
+        return 0;
+    } 
+
+    // Red LED initialization
+    if (gpio_pin_configure_dt(&red, GPIO_OUTPUT_INACTIVE) < 0) {
+        printk("Red LED configure failed!\n");
+        return 0;
+    }
+
+    // Initialize k_timer
+    k_timer_init(&my_timer, Timer_ISR, NULL);
+
+    k_sleep(K_SECONDS(1));  // Odota alustusten jälkeen
+
+    char c = 0;
+    int cnt = 0;
+    char buffer[16] = {0};
+
+    while (1) {
+        if (uart_poll_in(uart_dev, &c) == 0) {
+            if (c == '\n' || c == '\r') {
+                int ret = parser(buffer);
+                if (ret == COMMAND_OK) {
+                    printk("Timer started for %d seconds\n", time_parse(buffer));
+                } else {
+                    printk("Invalid time format!\n");
+                }
+                cnt = 0;
+                memset(buffer, 0, sizeof(buffer));
+            } else {
+                if (cnt < sizeof(buffer) - 1) {  // estä ylivuoto
+                    buffer[cnt++] = c;
+                }
+            }
+        }
+    }
+    return 0;
+}
