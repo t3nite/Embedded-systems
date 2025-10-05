@@ -1,0 +1,134 @@
+#include <gtest/gtest.h>
+#include "../TimeParser.h"
+
+// Test suite: TimeParserTest
+TEST(TimeParserTest, TestCaseCorrectTime) {
+
+    // Note that this test fails on purpose!!
+
+    char time_test[] = "141205";
+    ASSERT_EQ(time_parse(time_test),0);
+}
+
+// Correct times
+TEST(TimeParserTest, CorrectTime) {
+    char time1[] = "141205"; // 12 min 5 s
+    ASSERT_EQ(time_parse(time1), 12*60 + 5);
+
+    char time2[] = "235959"; // 59 min 59 s
+    ASSERT_EQ(time_parse(time2), 59*60 + 59);
+
+    char time3[] = "121530"; // 15 min 30 s
+    ASSERT_EQ(time_parse(time3), 15*60 + 30);
+}
+
+// Invalid times: out of range
+TEST(TimeParserTest, InvalidTimeValues) {
+    char invalid_hour[] = "240000";   // hour > 23
+    ASSERT_EQ(time_parse(invalid_hour), TIME_VALUE_ERROR);
+
+    char invalid_minute[] = "126000"; // minute > 59
+    ASSERT_EQ(time_parse(invalid_minute), TIME_VALUE_ERROR);
+
+    char invalid_second[] = "123060"; // second > 59
+    ASSERT_EQ(time_parse(invalid_second), TIME_VALUE_ERROR);
+
+    char invalid_time[] = "256061";   // kaikki yli
+    ASSERT_EQ(time_parse(invalid_time), TIME_VALUE_ERROR);
+}
+
+// Null or empty string
+TEST(TimeParserTest, NullOrEmptyTime) {
+    ASSERT_EQ(time_parse(nullptr), TIME_ARRAY_ERROR);
+    char empty_time[] = "";
+    ASSERT_EQ(time_parse(empty_time), TIME_ARRAY_ERROR);
+}
+
+// Invalid length
+TEST(TimeParserTest, InvalidLength) {
+    char short_time[] = "12345";
+    char long_time[]  = "1234567";
+    ASSERT_EQ(time_parse(short_time), TIME_LEN_ERROR);
+    ASSERT_EQ(time_parse(long_time), TIME_LEN_ERROR);
+}
+
+// Non-numeric characters
+TEST(TimeParserTest, NonNumericTime) {
+    char non_numeric1[] = "12AB34";
+    char non_numeric2[] = "HHMMSS";
+    char non_numeric3[] = "12 345";
+    ASSERT_EQ(time_parse(non_numeric1), TIME_VALUE_ERROR);
+    ASSERT_EQ(time_parse(non_numeric2), TIME_VALUE_ERROR);
+    ASSERT_EQ(time_parse(non_numeric3), TIME_VALUE_ERROR);
+}
+
+// Lisätestikeissi 1: Nolla sekuntia
+TEST(TimeParserTest, ZeroSeconds) {
+    char zero_time[] = "120000"; // 0 min 0 s
+    ASSERT_EQ(time_parse(zero_time), TIME_ZERO_ERROR);
+
+    char valid_time[] = "120005"; // 0 min 5 s
+    ASSERT_EQ(time_parse(valid_time), 5);
+}
+
+// Lisätestikeissi 2: Whitespace alussa/lopussa
+TEST(TimeParserTest, LeadingTrailingWhitespace) {
+    char leading_space[] = " 12005"; // 6 merkkiä mutta virheellinen
+    char trailing_space[] = "12005 "; 
+    ASSERT_EQ(time_parse(leading_space), TIME_VALUE_ERROR);
+    ASSERT_EQ(time_parse(trailing_space), TIME_VALUE_ERROR);
+
+    char correct[] = "120105"; // oikein
+    ASSERT_EQ(time_parse(correct), 1*60 + 5);
+}
+
+// Lisätestikeissi 3: Epäsallitut merkkimuodot
+TEST(TimeParserTest, InvalidFormatCharacters) {
+    char colon_format[] = "12:05:10"; // 8 merkkiä
+    char dash_format[] = "12-05-10";  // 8 merkkiä
+    ASSERT_EQ(time_parse(colon_format), TIME_LEN_ERROR);
+    ASSERT_EQ(time_parse(dash_format), TIME_LEN_ERROR);
+
+    char correct[] = "120510"; // oikein
+    ASSERT_EQ(time_parse(correct), 5*60 + 10);
+}
+
+// Testaa oikea sekvenssi ilman toistoa
+TEST(TrafficParserTest, ValidSequenceNoRepeat) {
+    traffic_sequence_t seq;
+    ASSERT_EQ(traffic_parse("R,100,Y,200,G,300", &seq), TRAFFIC_OK);
+    ASSERT_EQ(seq.length, 3);
+    ASSERT_EQ(seq.repeat, 1);
+    EXPECT_EQ(seq.colors[0], 'R');
+    EXPECT_EQ(seq.times[0], 100);
+}
+
+// Testaa oikea sekvenssi toistolla
+TEST(TrafficParserTest, ValidSequenceWithRepeat) {
+    traffic_sequence_t seq;
+    ASSERT_EQ(traffic_parse("R,100,Y,200,T,5,G,300", &seq), TRAFFIC_OK);
+    ASSERT_EQ(seq.length, 3);
+    ASSERT_EQ(seq.repeat, 5);
+}
+
+// Testaa väärät merkit
+TEST(TrafficParserTest, InvalidChars) {
+    traffic_sequence_t seq;
+    ASSERT_EQ(traffic_parse("R,100,X,200,G,300", &seq), TRAFFIC_CHAR_ERROR);
+}
+
+// Testaa väärä formaatti
+TEST(TrafficParserTest, InvalidFormat) {
+    traffic_sequence_t seq;
+    ASSERT_EQ(traffic_parse("R100Y200", &seq), TRAFFIC_FORMAT_ERROR);
+}
+
+// Testaa toisto nolla tai negatiivinen
+TEST(TrafficParserTest, InvalidRepeat) {
+    traffic_sequence_t seq;
+    ASSERT_EQ(traffic_parse("R,100,Y,200,T,0", &seq), TRAFFIC_REPEAT_ERROR);
+    ASSERT_EQ(traffic_parse("R,100,Y,200,T,-5", &seq), TRAFFIC_REPEAT_ERROR);
+}
+
+// https://google.github.io/googletest/reference/testing.html
+// https://google.github.io/googletest/reference/assertions.html
