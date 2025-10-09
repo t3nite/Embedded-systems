@@ -67,6 +67,10 @@ int traffic_parse(const char *input, traffic_sequence_t *seq) {
                 if (seq->repeat <= 0) return TRAFFIC_REPEAT_ERROR;
             } else if (color == 'R' || color == 'Y' || color == 'G') {
                 if (seq->length >= 40) return TRAFFIC_FORMAT_ERROR;
+
+                // tarkistus: yksittäinen aika ei yli 10s (10000ms)
+                if (time > 10000) return TRAFFIC_FORMAT_ERROR;
+
                 seq->colors[seq->length] = color;
                 seq->times[seq->length] = time;
                 seq->length++;
