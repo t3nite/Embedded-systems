@@ -1,1 +1,80 @@
+*** Settings ***
+Library   String
+Library   SerialLibrary
+
+*** Variables ***
+${com}   	COM3
+${baud} 	115200
+${board}	nRF
+${seq}      	R,1000,Y,1000,G,10000X
+${error}    	-1X
+# Testikeissit: oikeat ja virheelliset aikamerkkijonot
+${valid_time}    000120
+${valid_secs}    80
+${invalid_time}  001067
+${error_code}    -3
+
+*** Test Cases ***
+Connect Serial
+	Log To Console  Connecting to ${board}
+	Add Port  ${com}  baudrate=${baud}  encoding=ascii
+	Port Should Be Open  ${com}
+	Reset Input Buffer
+	Reset Output Buffer
+
+Serial Led Control
+	# lähetetään RYG ja lopetusmerkki X
+	Write Data   ${seq}   encoding=ascii 
+	Log To Console   Send sequence ${seq}
+
+	# vastaanotetaan merkkijono kunnes lopetusmerkki X (58) 
+	${read} =   Read Until   terminator=58   encoding=ascii 
+
+	# konsolille näkyviin vastaanotettu merkkijono
+	Log To Console   Received ${read}
+	
+	# vertaillaan merkkijonoa
+	Should Be Equal As Strings   ${read}    ${error}
+	Log To Console   Tested ${read} is same as ${error}
+
+	# astetta hankalampi tehdä testaus numeroina
+	# koska lopetusmerkki X pitää ensin poistaa merkkijonosta
+	# tai vaihtaa lopetusmerkki esim \0
+	# Should Be Equal As Integers   ${read}    -1
+
+Test Valid Time
+    # Lähetetään oikea aikamerkkijono
+    Write Data  ${valid_time}  encoding=ascii
+    Write Data  \r
+    Log To Console  Send sequence ${valid_time}
+
+    # Luetaan robotin vastaus UART:sta
+    ${read} =  Read Until  terminator=58  encoding=ascii
+    Log To Console  Received ${read}
+
+    # Poistetaan lopetusmerkki X ja verrataan numerona
+    ${num} =  Remove String  ${read}  X
+    Should Be Equal As Integers  ${num}  ${valid_secs}
+
+Test Invalid Time
+    # Lähetetään virheellinen aikamerkkijono
+    Write Data  ${invalid_time}  encoding=ascii
+    Write Data  \r
+    Log To Console  Send sequence ${invalid_time}
+
+    # Luetaan robotin vastaus UART:sta
+    ${read} =  Read Until  terminator=58  encoding=ascii
+    Log To Console  Received ${read}
+
+    # Poistetaan lopetusmerkki X ja verrataan numerona
+    ${num} =  Remove String  ${read}  X
+    Should Be Equal As Integers  ${num}  ${error_code}
+	
+Disconnect Serial
+	Log To Console  Disconnecting ${board}
+	[TearDown]  Delete Port  ${com}
+	
+	
+	C:\5_Test_automation>robot serial_str_example.robot
+
 
