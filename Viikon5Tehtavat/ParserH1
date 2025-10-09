@@ -1,0 +1,14 @@
+#ifndef TIMEPARSER_H
+#define TIMEPARSER_H
+
+// Error codes
+#define TIME_LEN_ERROR      -1 // väärän pituinen merkkijono
+#define TIME_ARRAY_ERROR    -2 // NULL tai tyhjä
+#define TIME_VALUE_ERROR    -3 // virheellinen arvo tai ei-num. merkki
+#define TIME_ZERO_ERROR     -4 // uusi virhekoodi nolla-sekunteja varten
+
+using namespace std;
+
+int time_parse(char *time);
+
+#endif

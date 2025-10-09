@@ -1,0 +1,29 @@
+#ifndef TIMEPARSER_H
+#define TIMEPARSER_H
+
+// Error codes
+#define TIME_LEN_ERROR      -1 // väärän pituinen merkkijono
+#define TIME_ARRAY_ERROR    -2 // NULL tai tyhjä
+#define TIME_VALUE_ERROR    -3 // virheellinen arvo tai ei-num. merkki
+#define TIME_ZERO_ERROR     -4 // uusi virhekoodi nolla-sekunteja varten
+
+#define TRAFFIC_OK            0
+#define TRAFFIC_CHAR_ERROR   -1
+#define TRAFFIC_FORMAT_ERROR -2
+#define TRAFFIC_REPEAT_ERROR -3
+
+// Tallennettu sekvenssi
+typedef struct {
+    char colors[80];
+    int times[40];
+    int length;
+    int repeat; // T,n
+} traffic_sequence_t;
+
+
+using namespace std;
+
+int time_parse(char *time);
+int traffic_parse(const char *input, traffic_sequence_t *seq);
+
+#endif
