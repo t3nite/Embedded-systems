@@ -8,6 +8,7 @@ Jos luot näitä varten omat tiedostot, niin muista muokata cmakelists.txt-tiedo
 Lopuksi liitä uusi parserointifunktio liikennevalo-ohjelmaasi. */
 
 // Perustelu: Lisätty uusi testisuite ja testejä.
+// CONFIG_HEAP_MEM_POOL_SIZE=1024 prj.conf
 
 #include <zephyr/kernel.h>
 #include <zephyr/sys/printk.h>
