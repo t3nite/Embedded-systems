@@ -130,5 +130,25 @@ TEST(TrafficParserTest, InvalidRepeat) {
     ASSERT_EQ(traffic_parse("R,100,Y,200,T,-5", &seq), TRAFFIC_REPEAT_ERROR);
 }
 
+// Testaa, että yksittäinen sekvenssi ei voi olla yli 10s
+TEST(TrafficParserTest, MaxSingleTimeLimit) {
+    traffic_sequence_t seq;
+
+    // yli 10s -> pitäisi antaa TRAFFIC_FORMAT_ERROR
+    ASSERT_EQ(traffic_parse("R,10001,Y,200", &seq), TRAFFIC_FORMAT_ERROR);
+    ASSERT_EQ(traffic_parse("G,15000", &seq), TRAFFIC_FORMAT_ERROR);
+
+    // tasan 10s -> hyväksytään
+    ASSERT_EQ(traffic_parse("R,10000,Y,200", &seq), TRAFFIC_OK);
+    ASSERT_EQ(seq.length, 2);
+    EXPECT_EQ(seq.times[0], 10000);
+    EXPECT_EQ(seq.times[1], 200);
+
+    // alle 10s -> hyväksytään
+    ASSERT_EQ(traffic_parse("R,9999", &seq), TRAFFIC_OK);
+    ASSERT_EQ(seq.length, 1);
+    EXPECT_EQ(seq.times[0], 9999);
+}
+
 // https://google.github.io/googletest/reference/testing.html
 // https://google.github.io/googletest/reference/assertions.html
