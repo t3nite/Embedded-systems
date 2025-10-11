@@ -1,0 +1,45 @@
+*** Settings ***
+Library       String
+Library       SerialLibrary
+Library       Collections
+
+*** Variables ***
+${com}             COM3
+${baud}            115200
+${board}           nRF
+${valid_time}      000120Z
+${valid_secs}      80
+${invalid_time}    000067Z
+
+*** Test Cases ***
+Connect Serial
+    Log To Console      Connecting to ${board}
+    Add Port        ${com}  baudrate=${baud}  encoding=ascii  timeout=5
+    Port Should Be Open  ${com}
+    Reset Input Buffer
+    Reset Output Buffer
+
+Test Valid Time
+    Log To Console      Send valid time: ${valid_time}
+    Write Data          ${valid_time}    encoding=ascii
+    ${response}=        Read Until  terminator=\r\n  encoding=ascii
+    ${clean}=           String.Strip String    ${response}
+    Log To Console      Received valid time: '${clean}'
+    ${num}=             Convert To Integer     ${clean}
+    Should Be Equal As Integers    ${num}    ${valid_secs}
+    Reset Input Buffer
+
+Test Invalid Time
+    Log To Console      Send invalid time: ${invalid_time}
+    Reset Input Buffer
+    Write Data          ${invalid_time}    encoding=ascii
+    Sleep               0.05s
+    ${response}=        Read Until  terminator=\r\n  encoding=ascii  timeout=1s
+    ${clean}=           String.Strip String    ${response}
+    Log To Console      Received invalid time response: '${clean}'
+    Should Be Equal As Strings    ${clean}    TimeParseError
+    Reset Input Buffer
+
+Disconnect Serial
+    Log To Console      Disconnecting ${board}
+    Delete Port         ${com}
