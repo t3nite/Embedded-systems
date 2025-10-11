@@ -75,6 +75,6 @@ Disconnect Serial
 	[TearDown]  Delete Port  ${com}
 	
 	
-	C:\5_Test_automation>robot serial_str_example.robot
+	C:\5_Test_automation>robot robotti1.robot.robot
 
 
