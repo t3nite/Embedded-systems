@@ -1,4 +1,4 @@
-/* pusketaan aikamerkkijonoja UARTtiin ja luetaan UARTin kautta robottille palautettu sekuntiluku tai virhekoodit, 
+/* Pusketaan aikamerkkijonoja UARTtiin ja luetaan UARTin kautta robottille palautettu sekuntiluku tai virhekoodit, 
 eli ne mitä edellisen viikkotehtävän parserifunktio palauttaa. 
 Robotti sitten tarkistaa, että olihan palautusarvo testikeississä oletettu. 
 Jos siis annetaan virheellinen merkkijono, niin odotetaan vastauksena sitä vastaavaa virhekoodia.*/
