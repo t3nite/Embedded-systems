@@ -159,50 +159,70 @@ void dispatcher_task(void *, void *, void *)
         }
 
         if (msg_len == 6 && all_digits) {
-            // validi aikamerkki
+            // ----------------------
+            // Aikasyöte (000000–235959)
+            // ----------------------
             int seconds = time_parse(rec_item->msg);
 
-            if (seconds >= 0) {
+            if (seconds > 0) {
                 char outbuf[32];
                 snprintf(outbuf, sizeof(outbuf), "%d\r\n", seconds);
-
-                // Lähetetään vastauksena Robotille heti
                 uart_send_string(outbuf);
 
-                // Luodaan light_data sinistä LEDiä varten erilliselle timerille
+                // Luodaan sinisen LEDin data
                 struct light_data *ldata = k_malloc(sizeof(struct light_data));
                 if (ldata) {
                     ldata->color = 'B';
                     ldata->time_ms = 1000;
-
-                    // Käynnistetään uusi thread tai timer LEDille,
-                    // ei odoteta sekunteja täällä
                     k_fifo_put(&light_fifo, ldata);
                 }
-
             } else {
-                // Lähetetään virheviesti heti
                 uart_send_string("TimeParseError\r\n");
             }
 
-        } else if (msg_len > 0) {
-            // ei validi 6-merkkinen numero → liikennevalosekvenssi
+        } else if (strchr(rec_item->msg, ',') != NULL) {
+            // ----------------------
+            // Liikennevalosyntaksi (esim. R,100,Y,500)
+            // ----------------------
             traffic_sequence_t seq;
             int res = traffic_parse(rec_item->msg, &seq);
+
             if (res != TRAFFIC_OK) {
-                uart_send_string("TimeParseError\r\n"); // Robot odottaa tätä
+                uart_send_string("TRAFFIC_FORMAT_ERROR\r\n");
             } else {
-                for (int r = 0; r < seq.repeat; r++) {
-                    for (int i = 0; i < seq.length; i++) {
-                        struct light_data *ldata = k_malloc(sizeof(struct light_data));
-                        if (!ldata) break;
-                        ldata->color = seq.colors[i];
-                        ldata->time_ms = seq.times[i];
-                        k_fifo_put(&light_fifo, ldata);
-                        k_sem_take(&release_sem, K_FOREVER);
+                // Tarkistetaan sekvenssi: värit R/Y/G ja ajat >0
+                bool valid_sequence = (seq.repeat > 0);
+                for (int i = 0; i < seq.length && valid_sequence; i++) {
+                    if (seq.times[i] <= 0 ||
+                        (seq.colors[i] != 'R' && seq.colors[i] != 'Y' && seq.colors[i] != 'G')) {
+                        valid_sequence = false;
+                    }
+                }
+
+                if (!valid_sequence) {
+                    uart_send_string("TRAFFIC_FORMAT_ERROR\r\n");
+                } else {
+                    // Suoritetaan sekvenssi normaalisti
+                    for (int r = 0; r < seq.repeat; r++) {
+                        for (int i = 0; i < seq.length; i++) {
+                            struct light_data *ldata = k_malloc(sizeof(struct light_data));
+                            if (!ldata) continue;
+
+                            ldata->color = seq.colors[i];
+                            ldata->time_ms = seq.times[i];
+                            k_fifo_put(&light_fifo, ldata);
+
+                            k_sem_take(&release_sem, K_FOREVER);
+                        }
                     }
                 }
             }
+
+        } else {
+            // ----------------------
+            // Kaikki muut epäkelvot syötteet aikasyötteille
+            // ----------------------
+            uart_send_string("TimeParseError\r\n");
         }
 
         k_free(rec_item);
@@ -254,7 +274,7 @@ int main(void)
         return -1;
     }
 
-    printk("System ready. Send e.g. 'R,1000,Y,1000,G,1000,T,2' or '000001Z' via UART.\n");
+    printk("System ready. Send e.g. 'R,1000,Y,1000,G,1000,T,2Z' or '000001Z' via UART.\n");
     return 0;
 }
 
