@@ -1,0 +1,94 @@
+*** Settings ***
+Library       String
+Library       SerialLibrary
+Library       Collections
+
+*** Variables ***
+${COM}                      COM3
+${BAUD}                     115200
+${BOARD}                    nRF
+${VALID_TIME}               000120Z
+${VALID_SECS}               80
+${INVALID_TIME}             000067Z
+${INVALID_LENGTH_SHORT}     00005Z
+${INVALID_LENGTH_LONG}      0000001Z
+${INVALID_NONNUMERIC}       00A120Z
+${INVALID_ZEROTIME}         000000Z
+${TIMEOUT}                  1s
+
+*** Test Cases ***
+Connect Serial
+    Log To Console      Connecting to ${board}
+    Add Port        ${com}  baudrate=${baud}  encoding=ascii  timeout=5
+    Port Should Be Open  ${com}
+    Reset Input Buffer
+    Reset Output Buffer
+
+Test Valid Time
+    Log To Console      Send valid time: ${VALID_TIME}
+    Write Data          ${VALID_TIME}    encoding=ascii
+    ${response}=        Read Until  terminator=\r\n  encoding=ascii  timeout=${TIMEOUT}
+    ${clean}=           String.Strip String    ${response}
+    Log To Console      Received valid time: '${clean}'
+    ${num}=             Convert To Integer     ${clean}
+    Should Be Equal As Integers    ${num}    ${VALID_SECS}
+    Reset Input Buffer
+
+Test Invalid Time
+    Log To Console      Send invalid time: ${INVALID_TIME}
+    Reset Input Buffer
+    Write Data          ${INVALID_TIME}    encoding=ascii
+    Sleep               0.05s
+    ${response}=        Read Until  terminator=\r\n  encoding=ascii  timeout=${TIMEOUT}
+    ${clean}=           String.Strip String    ${response}
+    Log To Console      Received invalid time response: '${clean}'
+    Should Be Equal As Strings    ${clean}    TimeParseError
+    Reset Input Buffer
+
+Test Invalid Length Short
+    Log To Console      Send invalid short: ${INVALID_LENGTH_SHORT}
+    Reset Input Buffer
+    Write Data          ${INVALID_LENGTH_SHORT}    encoding=ascii
+    Sleep               0.05s
+    ${response}=        Read Until  terminator=\r\n  encoding=ascii  timeout=${TIMEOUT}
+    ${clean}=           String.Strip String    ${response}
+    Log To Console      Received invalid short: '${clean}'
+    Should Be Equal As Strings    ${clean}    TimeParseError
+    Reset Input Buffer
+
+Test Invalid NonNumeric
+    Log To Console      Send invalid non-numeric: ${INVALID_NONNUMERIC}
+    Reset Input Buffer
+    Write Data          ${INVALID_NONNUMERIC}    encoding=ascii
+    Sleep               0.05s
+    ${response}=        Read Until  terminator=\r\n  encoding=ascii  timeout=${TIMEOUT}
+    ${clean}=           String.Strip String    ${response}
+    Log To Console      Received invalid non-numeric: '${clean}'
+    Should Be Equal As Strings    ${clean}    TimeParseError
+    Reset Input Buffer
+
+Test Invalid ZeroTime
+    Log To Console      Send invalid zero-time: ${INVALID_ZEROTIME}
+    Reset Input Buffer
+    Write Data          ${INVALID_ZEROTIME}    encoding=ascii
+    Sleep               0.05s
+    ${response}=        Read Until  terminator=\r\n  encoding=ascii  timeout=${TIMEOUT}
+    ${clean}=           String.Strip String    ${response}
+    Log To Console      Received invalid zero-time: '${clean}'
+    Should Be Equal As Strings    ${clean}    TimeParseError
+    Reset Input Buffer
+
+Test Invalid Length Long
+    Log To Console      Send invalid long: ${INVALID_LENGTH_LONG}
+    Reset Input Buffer
+    Write Data          ${INVALID_LENGTH_LONG}    encoding=ascii
+    Sleep               0.05s
+    ${response}=        Read Until  terminator=\r\n  encoding=ascii  timeout=${TIMEOUT}
+    ${clean}=           String.Strip String    ${response}
+    Log To Console      Received invalid long: '${clean}'
+    Should Be Equal As Strings    ${clean}    TimeParseError
+    Reset Input Buffer
+
+Disconnect Serial
+    Log To Console      Disconnecting ${BOARD}
+    Delete Port         ${COM}

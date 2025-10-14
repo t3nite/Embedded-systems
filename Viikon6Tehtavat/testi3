@@ -1,0 +1,41 @@
+C:\5_Test_automation>robot robotti3.robot
+==============================================================================
+Robotti3
+==============================================================================
+Connect Serial                                                        Connecting to nRF
+Connect Serial                                                        | PASS |
+------------------------------------------------------------------------------
+Test Valid Time                                                       Clearing UART buffer before sending valid time
+....Send valid time: 000001Z
+....Received valid time: '1'
+Test Valid Time                                                       | PASS |
+------------------------------------------------------------------------------
+Test Invalid Time                                                     Send invalid time: 000067Z
+......Received invalid time response: 'TimeParseError'
+Test Invalid Time                                                     | PASS |
+------------------------------------------------------------------------------
+Test Invalid Length Short                                             Send invalid short: 00005Z
+......Received invalid short: 'TimeParseError'
+Test Invalid Length Short                                             | PASS |
+------------------------------------------------------------------------------
+Test Invalid NonNumeric                                               Send invalid non-numeric: 00A120Z
+......Received invalid non-numeric: 'TimeParseError'
+Test Invalid NonNumeric                                               | PASS |
+------------------------------------------------------------------------------
+Test Invalid ZeroTime                                                 Send invalid zero-time: 000000Z
+......Received invalid zero-time: 'TimeParseError'
+Test Invalid ZeroTime                                                 | PASS |
+------------------------------------------------------------------------------
+Test Traffic Sequence Invalid :: Testataan virheellinen sekvenssi     Send invalid sequence: R,0,Z
+......Received invalid sequence response: 'TRAFFIC_FORMAT_ERROR'
+Test Traffic Sequence Invalid :: Testataan virheellinen sekvenssi     | PASS |
+------------------------------------------------------------------------------
+Test Traffic Sequence :: Testataan ajastettua sekvenssiä R,100,Y,500  Send valid sequence: R,100,Y,500Z
+Test Traffic Sequence :: Testataan ajastettua sekvenssiä R,100,Y,500  | PASS |
+------------------------------------------------------------------------------
+Disconnect Serial                                                     Disconnecting nRF
+Disconnect Serial                                                     | PASS |
+------------------------------------------------------------------------------
+Robotti3                                                              | PASS |
+9 tests, 9 passed, 0 failed
+==============================================================================

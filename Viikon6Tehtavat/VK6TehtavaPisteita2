@@ -1,0 +1,275 @@
+/*+1p suoritus: Lisätään aikamerkkijonon testikeissejä
+
+Tehdään Robotin skriptiin lisää testikeissejä sen mukaan mitä yksikkötestaustekniikoita edellisessä viikkotehtävässä 5 käytitte. 
+Hox, tässä voi samalla täydentää edellisen tehtävän vastausta!
+
+Jokaisessa testikeisseissä testaa aina sekä 1) oikeellinen suoritus oikeanlaisella aikamerkkijonolla 
+että 2) virheellinen suoritus väärällä aikamerkkijonolla. Samoin kuin aiemmassa viikkotehtävässä. 
+
+Esimerkkejä:
+- tarkista että merkkijono on aina tasan 6 merkkiä pitkä.
+- tarkista että merkkijonon palautusarvo ei ole 0 sekuntia (koska tällöin ajastinkeskeytys olisi turha..)
+- tarkista että merkkijonossa on vain numeroita, katso tätä varten c-kielen dokumentaatiosta funktio isdigit().
+- jne jne
+- (aiemmassa tehtävässä tarkistettiin myös onko aikamerkkijono null, 
+mutta tyhjää merkkijonoa ei taida Robotista pystyä lähettämään..) */
+
+// Perustelu: Lisätty testitapauksia
+
+#include <zephyr/kernel.h>
+#include <zephyr/sys/printk.h>
+#include <zephyr/device.h>
+#include <zephyr/drivers/uart.h>
+#include <zephyr/drivers/gpio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <ctype.h>
+
+// Error codes 
+#define TIME_LEN_ERROR     -1
+#define TIME_ARRAY_ERROR   -2
+#define TIME_VALUE_ERROR   -3
+#define TIME_ZERO_ERROR    -4 
+
+#define MAX_TIME_LEN 7  // 6 merkkiä + 'Z'
+
+// LEDs
+static const struct gpio_dt_spec red   = GPIO_DT_SPEC_GET(DT_ALIAS(led0), gpios);
+static const struct gpio_dt_spec green = GPIO_DT_SPEC_GET(DT_ALIAS(led1), gpios);
+static const struct gpio_dt_spec blue  = GPIO_DT_SPEC_GET(DT_ALIAS(led2), gpios);
+
+// UART
+#define UART_DEVICE_NODE DT_CHOSEN(zephyr_shell_uart)
+static const struct device *uart_dev = DEVICE_DT_GET(UART_DEVICE_NODE);
+
+// Traffic light states
+enum traffic_state {
+    STATE_RED,
+    STATE_YELLOW,
+    STATE_GREEN,
+    STATE_OFF
+};
+
+static enum traffic_state current_state = STATE_RED;
+static bool blue_active = false; // sininen LED päällä?
+
+// Parser prototype
+int time_parse(char *time);
+
+// --- Traffic light timer ---
+void traffic_light_cb(struct k_timer *timer)
+{
+    if (blue_active) {
+        // Sininen on päällä, ei muut ledit
+        return;
+    }
+
+    switch (current_state) {
+        case STATE_RED:
+            gpio_pin_set_dt(&red, 1);
+            gpio_pin_set_dt(&green, 0);
+            current_state = STATE_YELLOW;
+            break;
+        case STATE_YELLOW:
+            gpio_pin_set_dt(&red, 1);
+            gpio_pin_set_dt(&green, 1);
+            current_state = STATE_GREEN;
+            break;
+        case STATE_GREEN:
+            gpio_pin_set_dt(&red, 0);
+            gpio_pin_set_dt(&green, 1);
+            current_state = STATE_OFF;
+            break;
+        case STATE_OFF:
+            gpio_pin_set_dt(&red, 0);
+            gpio_pin_set_dt(&green, 0);
+            current_state = STATE_RED;
+            break;
+    }
+}
+K_TIMER_DEFINE(traffic_timer, traffic_light_cb, NULL);
+
+// --- Blue LED OFF timer ---
+void blue_off_cb(struct k_timer *timer)
+{
+    gpio_pin_set_dt(&blue, 0);
+    blue_active = false; // palauta liikennevalojen ohjaus
+}
+K_TIMER_DEFINE(blue_off_timer, blue_off_cb, NULL);
+
+// --- Blue LED ON timer ---
+void blue_led_cb(struct k_timer *timer)
+{
+    // Sammutetaan muut ledit sinisen ajaksi
+    gpio_pin_set_dt(&red, 0);
+    gpio_pin_set_dt(&green, 0);
+    blue_active = true;
+    gpio_pin_set_dt(&blue, 1);
+    // Käynnistetään timer sinisen sammutukseen
+    k_timer_start(&blue_off_timer, K_SECONDS((int)k_timer_user_data_get(timer)), K_NO_WAIT);
+}
+K_TIMER_DEFINE(blue_timer, blue_led_cb, NULL);
+
+void uart_send_string(const char *str)
+{
+    while (*str) {
+        uart_poll_out(uart_dev, *str++);
+    }
+}
+
+// apufunktio, joka varmistaa että viesti ehtii ulos
+static void uart_send_flush(const char *msg)
+{
+    while (*msg) {
+        uart_poll_out(uart_dev, *msg++);
+    }
+    k_msleep(50);  // Anna aikaa, että viesti ehtii varmasti ulos
+}
+
+void main(void)
+{
+    if (!device_is_ready(uart_dev)) {
+        printk("UART not ready!\n");
+        return;
+    }
+
+    if (!device_is_ready(red.port) || !device_is_ready(green.port) || !device_is_ready(blue.port)) {
+        printk("LEDs not ready!\n");
+        return;
+    }
+
+    gpio_pin_configure_dt(&red, GPIO_OUTPUT_INACTIVE);
+    gpio_pin_configure_dt(&green, GPIO_OUTPUT_INACTIVE);
+    gpio_pin_configure_dt(&blue, GPIO_OUTPUT_INACTIVE);
+
+    // Käynnistetään liikennevaloajastin: 1 s välein
+    k_timer_start(&traffic_timer, K_SECONDS(1), K_SECONDS(1));
+
+    char c = 0;
+    int cnt = 0;
+    bool error_mode = false; 
+    char buffer[16] = {0};
+
+  while (1) {
+    if (uart_poll_in(uart_dev, &c) == 0) {
+
+        if (error_mode) {
+            // Wait until the error input ends (Z received)
+            if (c == 'Z') {
+                error_mode = false;
+                cnt = 0;
+                memset(buffer, 0, sizeof(buffer));
+            }
+            continue;
+        }
+
+        if (c == 'Z') {
+            buffer[cnt] = '\0';
+            int seconds = time_parse(buffer);
+
+            if (seconds >= 0) {
+                char msg[32];
+                snprintf(msg, sizeof(msg), "%d\r\n", seconds);
+                uart_send_flush(msg);
+                k_timer_user_data_set(&blue_timer, (void *)(intptr_t)seconds);
+                k_timer_start(&blue_timer, K_SECONDS(seconds), K_NO_WAIT);
+            } else {
+                uart_send_flush("TimeParseError\r\n");
+
+                // Drain any remaining input until 'Z'
+                unsigned char dummy;
+                while (uart_poll_in(uart_dev, &dummy) == 0) {
+                    if (dummy == 'Z') break;
+                    k_msleep(2);
+                }
+            }
+
+            cnt = 0;
+            memset(buffer, 0, sizeof(buffer));
+        } else {
+            // Handle normal character input
+            if (cnt >= MAX_TIME_LEN - 1) { // leave room for null terminator
+                uart_send_flush("TimeParseError\r\n");
+
+                // Drain remaining characters until 'Z'
+                unsigned char dummy;
+                while (uart_poll_in(uart_dev, &dummy) == 0) {
+                    if (dummy == 'Z') break;
+                    k_msleep(2);
+                }
+
+                // Reset buffer for next message
+                error_mode = false;
+                cnt = 0;
+                memset(buffer, 0, sizeof(buffer));
+                continue;
+            }
+
+            // Store character in buffer
+            buffer[cnt++] = c;
+            buffer[cnt] = '\0';
+        }
+    }
+
+    k_msleep(10);
+}
+
+}
+
+// Parser function
+int time_parse(char *time) {
+
+    // how many seconds, default returns error
+    int seconds = TIME_LEN_ERROR;
+
+    if (time == NULL) {
+        return TIME_ARRAY_ERROR;
+    }
+
+    size_t len = strlen(time);
+
+     if (len == 0) {
+        return TIME_ARRAY_ERROR;  // tyhjä merkkijono
+    }
+
+    // Poista mahdollinen 'Z' lopusta
+    if (time[len - 1] == 'Z' || time[len - 1] == 'z') {
+        time[len - 1] = '\0';
+        len--;
+    }
+
+    if (len != 6) {
+        return TIME_LEN_ERROR;
+    }
+
+    if (strlen(time) > 6) {
+    return TIME_LEN_ERROR;
+    }
+
+    // Varmistetaan, että kaikki merkit ovat numeroita
+    for (int i = 0; i < 6; ++i) {
+        if (!isdigit((unsigned char)time[i])) {
+            return TIME_VALUE_ERROR;
+        }
+    }
+
+    int values[3];
+    values[2] = atoi(time+4); // seconds
+    time[4] = 0;
+    values[1] = atoi(time+2); // minutes
+    time[2] = 0;
+    values[0] = atoi(time);   // hours
+
+    // boundary checks
+    if (values[0] < 0 || values[0] > 23) return TIME_VALUE_ERROR;
+    if (values[1] < 0 || values[1] > 59) return TIME_VALUE_ERROR;
+    if (values[2] < 0 || values[2] > 59) return TIME_VALUE_ERROR;
+
+    
+    if (values[1] == 0 && values[2] == 0) return TIME_ZERO_ERROR;
+
+    // only minutes and seconds count
+    seconds = values[1] * 60 + values[2];
+
+    return seconds;
+}
