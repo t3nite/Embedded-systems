@@ -1,3 +1,15 @@
+/*+1p suoritus: Lisätään ajastetun sekvenssin testikeissejä
+
+Jos teitte sekvensseihin ajastuksen (tyyliin "R,100,Y,500") niin tähän vastaava testaus, 
+eli jos kirjain tai aika on väärä väärä (esim 0), palautetaan virhekoodi. Muutoin sekvenssin suoritetaan.*/
+
+// Perustelu: Lisätty testit liikennevalosekvensseille
+
+// Pitää aina flashätä uudestaan ennen kuin robotin ajaa tai "Test valid time"- testi epäonnistuu...
+
+// Palauttaa error-viestin TimeParseError tai TRAFFIC_FORMAT_ERROR virhekoodien sijasta, 
+// mutta nämähän perustuvat virhekoodeihin
+
 // CONFIG_HEAP_MEM_POOL_SIZE=1024 prj.conf
 // cd C:\5_Test_automation>robot robotti3.robot
 
@@ -159,38 +171,38 @@ void dispatcher_task(void *, void *, void *)
         }
 
         if (msg_len == 6 && all_digits) {
-            // ----------------------
-            // Aikasyöte (000000–235959)
-            // ----------------------
+            // Aikasyöte toimii nyt viiveenä
             int seconds = time_parse(rec_item->msg);
 
-            if (seconds > 0) {
-                char outbuf[32];
-                snprintf(outbuf, sizeof(outbuf), "%d\r\n", seconds);
-                uart_send_string(outbuf);
+            if (seconds >= 0) {  // valid time
+                // Odotetaan viiveen verran
+                k_msleep(seconds * 1000);
 
-                // Luodaan sinisen LEDin data
+                // Sytytetään sininen LED 1 s
                 struct light_data *ldata = k_malloc(sizeof(struct light_data));
                 if (ldata) {
                     ldata->color = 'B';
                     ldata->time_ms = 1000;
                     k_fifo_put(&light_fifo, ldata);
                 }
+
+                // Lähetetään Robotille viiveen vahvistus
+                char outbuf[32];
+                snprintf(outbuf, sizeof(outbuf), "%d\r\n", seconds);
+                uart_send_string(outbuf);
+
             } else {
                 uart_send_string("TimeParseError\r\n");
             }
 
         } else if (strchr(rec_item->msg, ',') != NULL) {
-            // ----------------------
             // Liikennevalosyntaksi (esim. R,100,Y,500)
-            // ----------------------
             traffic_sequence_t seq;
             int res = traffic_parse(rec_item->msg, &seq);
 
             if (res != TRAFFIC_OK) {
                 uart_send_string("TRAFFIC_FORMAT_ERROR\r\n");
             } else {
-                // Tarkistetaan sekvenssi: värit R/Y/G ja ajat >0
                 bool valid_sequence = (seq.repeat > 0);
                 for (int i = 0; i < seq.length && valid_sequence; i++) {
                     if (seq.times[i] <= 0 ||
@@ -202,7 +214,6 @@ void dispatcher_task(void *, void *, void *)
                 if (!valid_sequence) {
                     uart_send_string("TRAFFIC_FORMAT_ERROR\r\n");
                 } else {
-                    // Suoritetaan sekvenssi normaalisti
                     for (int r = 0; r < seq.repeat; r++) {
                         for (int i = 0; i < seq.length; i++) {
                             struct light_data *ldata = k_malloc(sizeof(struct light_data));
@@ -219,9 +230,7 @@ void dispatcher_task(void *, void *, void *)
             }
 
         } else {
-            // ----------------------
-            // Kaikki muut epäkelvot syötteet aikasyötteille
-            // ----------------------
+            // Muut epäkelvot aikasyötteet
             uart_send_string("TimeParseError\r\n");
         }
 
