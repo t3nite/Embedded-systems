@@ -68,6 +68,16 @@ void uart_print(const char *msg) {
     }
 }
 
+// ---------------- UART SEND STRING FUNKTIO ROBOTILLE ----------------
+void uart_send_string(const char *msg)
+{
+    if (!device_is_ready(uart_dev)) return;
+    size_t len = strlen(msg);
+    for (size_t i = 0; i < len; i++) {
+        uart_poll_out(uart_dev, msg[i]);
+    }
+}
+
 // ---------------- HARDIS INITIALISOINTI ----------------
 int init_hardware(void)
 {
@@ -102,28 +112,22 @@ void uart_task(void *, void *, void *)
     while (1) {
         if (uart_poll_in(uart_dev, (uint8_t *)&rc) == 0) {
 
-            // Jos saapuu Z, lopetetaan viesti ja laitetaan FIFO:hon
             if (rc == 'Z') {
                 if (uart_msg_cnt > 0) {
-                    uart_msg[uart_msg_cnt] = '\0'; // lopeta merkkijono
+                    uart_msg[uart_msg_cnt] = '\0';
                     struct dispatcher_data *buf = k_malloc(sizeof(struct dispatcher_data));
                     if (buf != NULL) {
                         strncpy(buf->msg, uart_msg, sizeof(buf->msg)-1);
                         buf->msg[sizeof(buf->msg)-1] = '\0';
                         k_fifo_put(&dispatcher_fifo, buf);
-                        //printk("UART msg: %s\n", uart_msg);
                     }
                 }
-                uart_msg_cnt = 0; // resetoi puskurin
+                uart_msg_cnt = 0;
                 continue;
             }
 
-            // Ohitetaan kaikki whitespace-merkit
-            if (rc == '\r' || rc == '\n' || rc == ' ' || rc == '\t') {
-                continue;
-            }
+            if (rc == '\r' || rc == '\n' || rc == ' ' || rc == '\t') continue;
 
-            // Tallennetaan muut merkit puskurin loppuun
             if (uart_msg_cnt < sizeof(uart_msg)-1) {
                 uart_msg[uart_msg_cnt++] = rc;
             }
@@ -132,7 +136,6 @@ void uart_task(void *, void *, void *)
     }
 }
 
-// ---------------- DISPATCHER TASK ----------------
 void dispatcher_task(void *, void *, void *)
 {
     while (1) {
@@ -141,66 +144,68 @@ void dispatcher_task(void *, void *, void *)
 
         size_t msg_len = strlen(rec_item->msg);
 
-        // Poistetaan lopetusmerkki Z
+        // Poista lopetus-Z jos se on vielä jäljellä
         if (msg_len > 0 && rec_item->msg[msg_len - 1] == 'Z') {
             rec_item->msg[msg_len - 1] = '\0';
             msg_len--;
         }
 
-        // Tarkistetaan, onko viesti aikamerkki (vain numeroita, 6 merkkiä)
-        bool is_time = (msg_len == 6);
-        for (size_t i = 0; i < msg_len && is_time; i++) {
+        bool all_digits = true;
+        for (size_t i = 0; i < msg_len; i++) {
             if (!isdigit((unsigned char)rec_item->msg[i])) {
-                is_time = false;
+                all_digits = false;
+                break;
             }
         }
 
-        if (is_time) {
+        if (msg_len == 6 && all_digits) {
+            // validi aikamerkki
             int seconds = time_parse(rec_item->msg);
-            char outbuf[32];
 
             if (seconds >= 0) {
-                // Lähetetään sekuntiluku Robot Frameworkille
+                char outbuf[32];
                 snprintf(outbuf, sizeof(outbuf), "%d\r\n", seconds);
-                uart_print(outbuf);
 
-                // Sytytetään sininen LED ajastetusti
+                // Lähetetään vastauksena Robotille heti
+                uart_send_string(outbuf);
+
+                // Luodaan light_data sinistä LEDiä varten erilliselle timerille
                 struct light_data *ldata = k_malloc(sizeof(struct light_data));
                 if (ldata) {
                     ldata->color = 'B';
                     ldata->time_ms = 1000;
-                    k_msleep(seconds * 1000);  // viive ennen sytytystä
+
+                    // Käynnistetään uusi thread tai timer LEDille,
+                    // ei odoteta sekunteja täällä
                     k_fifo_put(&light_fifo, ldata);
-                    k_sem_take(&release_sem, K_FOREVER);
                 }
+
             } else {
-                   uart_print("TimeParseError\r\n");
-                   k_msleep(20); 
+                // Lähetetään virheviesti heti
+                uart_send_string("TimeParseError\r\n");
             }
-        } else {
-            // Käsitellään liikennevalosekvenssi
+
+        } else if (msg_len > 0) {
+            // ei validi 6-merkkinen numero → liikennevalosekvenssi
             traffic_sequence_t seq;
             int res = traffic_parse(rec_item->msg, &seq);
             if (res != TRAFFIC_OK) {
-                uart_print("Error: Invalid sequence\r\n");
-                k_free(rec_item);
-                continue;
-            }
-
-            for (int r = 0; r < seq.repeat; r++) {
-                for (int i = 0; i < seq.length; i++) {
-                    struct light_data *ldata = k_malloc(sizeof(struct light_data));
-                    if (!ldata) break;
-                    ldata->color = seq.colors[i];
-                    ldata->time_ms = seq.times[i];
-                    k_fifo_put(&light_fifo, ldata);
-                    k_sem_take(&release_sem, K_FOREVER);
+                uart_send_string("TimeParseError\r\n"); // Robot odottaa tätä
+            } else {
+                for (int r = 0; r < seq.repeat; r++) {
+                    for (int i = 0; i < seq.length; i++) {
+                        struct light_data *ldata = k_malloc(sizeof(struct light_data));
+                        if (!ldata) break;
+                        ldata->color = seq.colors[i];
+                        ldata->time_ms = seq.times[i];
+                        k_fifo_put(&light_fifo, ldata);
+                        k_sem_take(&release_sem, K_FOREVER);
+                    }
                 }
             }
         }
 
         k_free(rec_item);
-        continue;
     }
 }
 
@@ -228,17 +233,6 @@ void light_task(void *, void *, void *)
         gpio_pin_set_dt(&green, 0);
         gpio_pin_set_dt(&blue, 0);
 
-        /* Lähetetään myös UART:iin jotta testiskripti lukee tämän 
-        {
-            char outbuf[64];
-            int n = snprintf(outbuf, sizeof(outbuf), "%c done (%d ms)\r\n", ldata->color, ldata->time_ms);
-            if (n > 0) {
-                uart_print(outbuf);
-            }
-        }
-        */
-
-        //printk("%c done (%d ms)\n", ldata->color, ldata->time_ms); 
         k_free(ldata);
         k_sem_give(&release_sem);
     }
