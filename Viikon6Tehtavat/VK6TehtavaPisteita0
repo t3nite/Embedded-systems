@@ -1,5 +1,5 @@
 // CONFIG_HEAP_MEM_POOL_SIZE=1024 prj.conf
-// cd C:\5_Test_automation>robot robotti1.robot
+// cd C:\5_Test_automation>robot robotti3.robot
 
 #include <ctype.h>
 #include <zephyr/kernel.h>
